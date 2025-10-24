@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>服务器监控系统</title>
+    <meta charset="utf-8">
+</head>
+<body>
+    <h1>服务器监控系统 - 建设中...</h1>
+    <!-- 后续可添加主机管理表单、监控数据表格等 -->
+    <form action="/add_host" method="post">
+        <label>主机IP：</label>
+        <input type="text" name="ip" required><br>
+        <label>SSH用户名：</label>
+        <input type="text" name="user" required><br>
+        <label>SSH密码：</label>
+        <input type="password" name="pwd" required><br>
+        <button type="submit">添加主机</button>
+    </form>
+</body>
+</html>
