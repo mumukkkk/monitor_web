@@ -3,18 +3,389 @@
 <head>
     <title>服务器监控系统</title>
     <meta charset="utf-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .server-list {
+            margin-top: 20px;
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .server-list th, .server-list td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .server-list th {
+            background-color: #f2f2f2;
+        }
+        .server-list tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .add-server-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 50%;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: black;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        .delete-btn {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        .edit-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .message {
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
 </head>
 <body>
-    <h1>服务器监控系统 - 建设中...</h1>
-    <!-- 后续可添加主机管理表单、监控数据表格等 -->
-    <form action="/add_host" method="post">
-        <label>主机IP：</label>
-        <input type="text" name="ip" required><br>
-        <label>SSH用户名：</label>
-        <input type="text" name="user" required><br>
-        <label>SSH密码：</label>
-        <input type="password" name="pwd" required><br>
-        <button type="submit">添加主机</button>
-    </form>
+    <h1>服务器监控系统</h1>
+    
+    <button class="add-server-btn" onclick="openAddModal()">添加服务器</button>
+    
+    <div id="message"></div>
+    
+    <h2>服务器列表</h2>
+    <table class="server-list">
+        <thead>
+            <tr>
+                <th>IP地址</th>
+                <th>用户名</th>
+                <th>端口</th>
+                <th>添加时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="server-list-body">
+            {% for host in hosts %}
+            <tr id="host-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">
+                <td>{{ host[0] }}</td>
+                <td>{{ host[1] }}</td>
+                <td>{{ host[3] }}</td>
+                <td>{{ host[4] }}</td>
+                <td>
+                    <button class="edit-btn" onclick="openEditModal('{{ host[0] }}', '{{ host[1] }}', '{{ host[3] }}')">编辑</button>
+                    <button class="delete-btn" onclick="openDeleteModal('{{ host[0] }}', '{{ host[1] }}', '{{ host[3] }}')">删除</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- 添加服务器模态窗口 -->
+    <div id="addServerModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeAddModal()">&times;</span>
+            <h2>添加服务器</h2>
+            <form id="add-host-form">
+                <div class="form-group">
+                    <label for="ip">主机IP：</label>
+                    <input type="text" id="ip" name="ip" required>
+                </div>
+                <div class="form-group">
+                    <label for="user">SSH用户名：</label>
+                    <input type="text" id="user" name="user" required>
+                </div>
+                <div class="form-group">
+                    <label for="pwd">SSH密码：</label>
+                    <input type="password" id="pwd" name="pwd" required>
+                </div>
+                <div class="form-group">
+                    <label for="port">SSH端口（可选，默认22）：</label>
+                    <input type="number" id="port" name="port" value="22" min="1" max="65535">
+                </div>
+                <button type="submit">添加</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 编辑服务器模态窗口 -->
+    <div id="editServerModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeEditModal()">&times;</span>
+            <h2>编辑服务器</h2>
+            <form id="edit-host-form">
+                <input type="hidden" id="old_ip" name="old_ip">
+                <input type="hidden" id="old_user" name="old_user">
+                <input type="hidden" id="old_port" name="old_port">
+                
+                <div class="form-group">
+                    <label for="new_ip">主机IP：</label>
+                    <input type="text" id="new_ip" name="new_ip" required>
+                </div>
+                <div class="form-group">
+                    <label for="new_user">SSH用户名：</label>
+                    <input type="text" id="new_user" name="new_user" required>
+                </div>
+                <div class="form-group">
+                    <label for="new_pwd">SSH密码（留空则不修改）：</label>
+                    <input type="password" id="new_pwd" name="new_pwd">
+                </div>
+                <div class="form-group">
+                    <label for="new_port">SSH端口：</label>
+                    <input type="number" id="new_port" name="new_port" min="1" max="65535" required>
+                </div>
+                <button type="submit">更新</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 删除确认模态窗口 -->
+    <div id="deleteServerModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeDeleteModal()">&times;</span>
+            <h2>删除服务器</h2>
+            <p>确定要删除服务器 <span id="delete-ip"></span> 吗？</p>
+            <p>请输入用户名 <span id="delete-user"></span> 以确认删除：</p>
+            <form id="delete-host-form">
+                <input type="hidden" id="delete_ip" name="ip">
+                <input type="hidden" id="delete_user" name="user">
+                <input type="hidden" id="delete_port" name="port">
+                
+                <div class="form-group">
+                    <label for="confirm_user">确认用户名：</label>
+                    <input type="text" id="confirm_user" name="confirm_user" required>
+                </div>
+                <button type="submit" style="background-color: #f44336;">确认删除</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // 获取模态窗口元素
+        var addModal = document.getElementById('addServerModal');
+        var editModal = document.getElementById('editServerModal');
+        var deleteModal = document.getElementById('deleteServerModal');
+        
+        // 打开添加模态窗口
+        function openAddModal() {
+            addModal.style.display = 'block';
+        }
+        
+        // 关闭添加模态窗口
+        function closeAddModal() {
+            addModal.style.display = 'none';
+            document.getElementById('add-host-form').reset();
+            hideMessage();
+        }
+        
+        // 打开编辑模态窗口
+        function openEditModal(ip, user, port) {
+            document.getElementById('old_ip').value = ip;
+            document.getElementById('old_user').value = user;
+            document.getElementById('old_port').value = port;
+            
+            document.getElementById('new_ip').value = ip;
+            document.getElementById('new_user').value = user;
+            document.getElementById('new_port').value = port;
+            
+            editModal.style.display = 'block';
+        }
+        
+        // 关闭编辑模态窗口
+        function closeEditModal() {
+            editModal.style.display = 'none';
+            document.getElementById('edit-host-form').reset();
+            hideMessage();
+        }
+        
+        // 打开删除模态窗口
+        function openDeleteModal(ip, user, port) {
+            document.getElementById('delete_ip').value = ip;
+            document.getElementById('delete_user').value = user;
+            document.getElementById('delete_port').value = port;
+            
+            document.getElementById('delete-ip').textContent = ip;
+            document.getElementById('delete-user').textContent = user;
+            
+            deleteModal.style.display = 'block';
+        }
+        
+        // 关闭删除模态窗口
+        function closeDeleteModal() {
+            deleteModal.style.display = 'none';
+            document.getElementById('delete-host-form').reset();
+            hideMessage();
+        }
+        
+        // 点击模态窗口外部关闭
+        window.onclick = function(event) {
+            if (event.target == addModal) {
+                closeAddModal();
+            }
+            if (event.target == editModal) {
+                closeEditModal();
+            }
+            if (event.target == deleteModal) {
+                closeDeleteModal();
+            }
+        }
+        
+        // 显示消息
+        function showMessage(message, isSuccess) {
+            var messageDiv = document.getElementById('message');
+            messageDiv.textContent = message;
+            messageDiv.className = 'message ' + (isSuccess ? 'success' : 'error');
+            messageDiv.style.display = 'block';
+        }
+        
+        // 隐藏消息
+        function hideMessage() {
+            document.getElementById('message').style.display = 'none';
+        }
+        
+        // 添加主机表单提交
+        document.getElementById('add-host-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            var formData = new FormData(this);
+            
+            fetch('/add_host', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, true);
+                    closeAddModal();
+                    // 刷新页面以更新服务器列表
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
+                } else {
+                    showMessage(data.message, false);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showMessage('添加失败，请重试', false);
+            });
+        });
+        
+        // 编辑主机表单提交
+        document.getElementById('edit-host-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            var formData = new FormData(this);
+            
+            fetch('/update_host', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, true);
+                    closeEditModal();
+                    // 刷新页面以更新服务器列表
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
+                } else {
+                    showMessage(data.message, false);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showMessage('更新失败，请重试', false);
+            });
+        });
+        
+        // 删除主机表单提交
+        document.getElementById('delete-host-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            var formData = new FormData(this);
+            
+            fetch('/delete_host', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message, true);
+                    closeDeleteModal();
+                    // 刷新页面以更新服务器列表
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1000);
+                } else {
+                    showMessage(data.message, false);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showMessage('删除失败，请重试', false);
+            });
+        });
+    </script>
 </body>
 </html>
