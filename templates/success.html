@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>提交成功</title>
+    <meta charset="utf-8">
+    <script>
+        var countdown = 5; // 倒计时秒数
+        function updateCountdown() {
+            document.getElementById('countdown').textContent = countdown;
+            if (countdown <= 0) {
+                window.location.href = '/'; // 跳转回主页
+            } else {
+                countdown--;
+                setTimeout(updateCountdown, 1000); // 每秒更新一次
+            }
+        }
+        // 页面加载完成后开始倒计时
+        window.onload = function() {
+            updateCountdown();
+        };
+    </script>
+</head>
+<body>
+    <h1>主机添加成功！</h1>
+    <p>页面将在 <span id="countdown">5</span> 秒后自动跳转回主页...</p>
+    <p>如果页面没有自动跳转，请 <a href="/">点击这里</a> 返回主页</p>
+</body>
+</html> 
