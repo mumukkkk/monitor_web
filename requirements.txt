@@ -1,2 +1,5 @@
 flask==2.0.1
 werkzeug==2.0.3
+ansible==2.9.27
+paramiko==3.4.0
+cryptography==42.0.0
