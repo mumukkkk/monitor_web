@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>监控大屏 - 服务器监控系统</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .nav-buttons {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .nav-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 0 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .nav-btn:hover {
+            background-color: #1976D2;
+        }
+        .nav-btn.active {
+            background-color: #0D47A1;
+            font-weight: bold;
+        }
+        .dashboard-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        .chart-placeholder {
+            text-align: center;
+            padding: 60px 20px;
+            background-color: #f9f9f9;
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .chart-title {
+            font-size: 24px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .chart-desc {
+            color: #999;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>服务器监控系统 - 监控大屏</h1>
+    
+    <div class="nav-buttons">
+        <button class="nav-btn" onclick="showHostManagement()">主机管理</button>
+        <button class="nav-btn active" onclick="showMonitorDashboard()">监控大屏</button>
+    </div>
+    
+    <div class="dashboard-container">
+        <div class="chart-placeholder">
+            <div class="chart-title">📊 监控数据可视化大屏</div>
+            <div class="chart-desc">这里将使用 ECharts 图表库展示服务器监控数据</div>
+            <div class="chart-desc" style="margin-top: 20px;">
+                <strong>计划展示的图表：</strong><br>
+                ✅ 实时CPU使用率趋势图<br>
+                ✅ 内存使用率柱状图<br>
+                ✅ 磁盘使用率环形图<br>
+                ✅ 服务器状态分布饼图<br>
+                ✅ 网络流量监控图
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="goBack()" style="padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                返回主机管理
+            </button>
+        </div>
+    </div>
+
+    <script>
+        function showHostManagement() {
+            window.location.href = '/';
+        }
+        
+        function showMonitorDashboard() {
+            // 当前页面，无需操作
+        }
+        
+        function goBack() {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>

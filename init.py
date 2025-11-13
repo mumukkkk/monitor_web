@@ -294,46 +294,65 @@ ansible_become_pass={password}
                 f.write(inventory_content)
             
             # 执行ping命令检查上线情况
-            ping_cmd = ["ansible", ip, "-i" ,"ansible_inventory", "-m", "ping"]
-            result = subprocess.run(ping_cmd, check=True, capture_output=True, text=True)
+            ping_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "ping"]
+            result = subprocess.run(ping_cmd, capture_output=True, text=True)
             output = result.stdout.strip()
-            if "pong" in output:
+            
+            if "SUCCESS" in output and "pong" in output:
                 print(f"{ip} | 成功响应")
                 is_online = 1
-                # 执行Ansible命令获取CPU使用率
-                cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
-                        "-a", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"]
-                cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
-                cpu_usage = float(cpu_result.stdout.strip().split('\n')[-1]) if cpu_result.returncode == 0 else 0.0
-            
-                # 执行Ansible命令获取内存使用率
-                memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
-            
-                memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
-
-                memory_usage = float(memory_result.stdout.strip().split('\n')[-1]) if memory_result.returncode == 0 else 0.0
-            
-
-                # 执行Ansible命令获取磁盘使用率
-                disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
-            
-                disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
                 
-                disk_usage = float(disk_result.stdout.strip().split('\n')[-1]) if disk_result.returncode == 0 else 0.0
-            
+                try:
+                    # 执行Ansible命令获取CPU使用率
+                    cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                            "-a", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"]
+                    cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
+                    cpu_output = cpu_result.stdout.strip().split('\n')[-1]
+                    cpu_usage = float(cpu_output) if cpu_result.returncode == 0 and cpu_output.replace('.', '').isdigit() else 0.0
+                except:
+                    cpu_usage = 0.0
+                
+                try:
+                    # 执行Ansible命令获取内存使用率
+                    memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  
+                            "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
+                    memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
+                    memory_output = memory_result.stdout.strip().split('\n')[-1]
+                    memory_usage = float(memory_output) if memory_result.returncode == 0 and memory_output.replace('.', '').isdigit() else 0.0
+                except:
+                    memory_usage = 0.0
+                
+                try:
+                    # 执行Ansible命令获取磁盘使用率
+                    disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                            "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
+                    disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
+                    disk_output = disk_result.stdout.strip().split('\n')[-1]
+                    disk_usage = float(disk_output) if disk_result.returncode == 0 and disk_output.replace('.', '').isdigit() else 0.0
+                except:
+                    disk_usage = 0.0
+                
                 print(f"采集到 {ip} 的数据: CPU={cpu_usage:.2f}%, 内存={memory_usage:.2f}%, 磁盘={disk_usage:.2f}%")
-            
+                
                 # 保存到数据库
-                save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage)
+                save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online)
             else:
-                print(f"{ip} | 未成功响应")
+                print(f"{ip} | 未成功响应: {output}")
                 # 保存离线状态，其他指标设为0
                 is_online = 0
                 save_monitoring_data(ip, 0.0, 0.0, 0.0, is_online)
-                continue
+                
         except Exception as e:
             print(f"采集 {ip} 数据时出错: {e}")
+            # 保存错误状态
+            save_monitoring_data(ip, 0.0, 0.0, 0.0, 0)
+    
     # 删除临时文件
+    try:
+        os.remove('ansible_inventory')
+    except:
+        pass
+
 def monitoring_loop():
     """监控循环"""
     while True:
@@ -352,6 +371,51 @@ def show_hosts():
     html += "</table><br><a href='/'>返回主页</a>"
     return html
 
+@app.route('/get_real_time_data')
+def get_real_time_data():
+    """获取所有主机的实时监控数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取每个主机的最新监控数据
+        cursor.execute('''
+            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, md.is_online, md.check_time, h.user, h.port
+            FROM monitoring_data md
+            INNER JOIN (
+                SELECT ip, MAX(check_time) as latest_time
+                FROM monitoring_data
+                GROUP BY ip
+            ) latest ON md.ip = latest.ip AND md.check_time = latest.latest_time
+            INNER JOIN hosts h ON md.ip = h.ip
+        ''')
+        
+        data = cursor.fetchall()
+        conn.close()
+        
+        # 转换为字典格式便于前端使用
+        result = {}
+        for row in data:
+            result[row[0]] = {
+                'cpu_usage': row[1],
+                'memory_usage': row[2],
+                'disk_usage': row[3],
+                'is_online': row[4],
+                'check_time': row[5],
+                'user': row[6],
+                'port': row[7]
+            }
+        
+        return jsonify(result)
+    except sqlite3.Error as e:
+        print(f"数据库错误: {e}")
+        return jsonify({})
+
+@app.route('/monitor_dashboard')
+def monitor_dashboard():
+    """监控大屏页面"""
+    return render_template('monitor_dashboard.html')
+
 if __name__ == '__main__':
     # 初始化数据库
     init_db()
@@ -361,3 +425,4 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     app.run(host='0.0.0.0', port=80)
+
