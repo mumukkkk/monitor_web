@@ -358,8 +358,8 @@ def monitoring_loop():
     while True:
         print(f"{datetime.now()}: 开始采集监控数据")
         collect_monitoring_data()
-        print(f"{datetime.now()}: 监控数据采集完成，等待30秒")
-        time.sleep(30)
+        # print(f"{datetime.now()}: 监控数据采集完成，等待30秒")
+        # time.sleep(1)
 
 # 添加一个路由来查看所有主机（用于调试）
 @app.route('/hosts')
