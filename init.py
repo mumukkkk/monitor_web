@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from  flask import Flask, render_template, request, jsonify
 import base64
 import sqlite3
 import os
@@ -51,6 +51,41 @@ def init_db():
             PRIMARY KEY (ip, check_time)
         )
     ''')
+    
+    # 创建告警规则表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_name TEXT NOT NULL,
+            host_ip TEXT NOT NULL,
+            metric_type TEXT NOT NULL CHECK (metric_type IN ('cpu', 'memory', 'disk')),
+            threshold_value REAL NOT NULL,
+            comparison_operator TEXT NOT NULL CHECK (comparison_operator IN ('>', '<', '>=', '<=')),
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (host_ip) REFERENCES hosts (ip)
+        )
+    ''')
+    
+    # 创建告警通知表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alert_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            host_ip TEXT NOT NULL,
+            metric_type TEXT NOT NULL,
+            current_value REAL NOT NULL,
+            threshold_value REAL NOT NULL,
+            message TEXT NOT NULL,
+            severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+            is_resolved INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMP,
+            FOREIGN KEY (rule_id) REFERENCES alert_rules (id)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -264,6 +299,184 @@ def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0, n
         print(f"数据库错误: {e}")
         return False
 
+def check_alerts(ip, cpu_usage, memory_usage, disk_usage):
+    """检查告警条件并创建通知"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取该主机的所有活跃告警规则
+        cursor.execute('''
+            SELECT id, rule_name, metric_type, threshold_value, comparison_operator
+            FROM alert_rules
+            WHERE host_ip = ? AND is_active = 1
+        ''', (ip,))
+        
+        rules = cursor.fetchall()
+        
+        # 检查每个告警规则
+        for rule in rules:
+            rule_id, rule_name, metric_type, threshold_value, comparison_operator = rule
+            
+            # 确定当前值和严重程度
+            current_value = None
+            if metric_type == 'cpu':
+                current_value = cpu_usage
+            elif metric_type == 'memory':
+                current_value = memory_usage
+            elif metric_type == 'disk':
+                current_value = disk_usage
+            
+            if current_value is None:
+                continue
+            
+            # 检查告警条件
+            is_triggered = False
+            if comparison_operator == '>':
+                is_triggered = current_value > threshold_value
+            elif comparison_operator == '<':
+                is_triggered = current_value < threshold_value
+            elif comparison_operator == '>=':
+                is_triggered = current_value >= threshold_value
+            elif comparison_operator == '<=':
+                is_triggered = current_value <= threshold_value
+            
+            if is_triggered:
+                # 检查是否已存在未解决的相同告警
+                cursor.execute('''
+                    SELECT id FROM alert_notifications
+                    WHERE rule_id = ? AND host_ip = ? AND is_resolved = 0
+                    ORDER BY created_at DESC LIMIT 1
+                ''', (rule_id, ip))
+                
+                existing_alert = cursor.fetchone()
+                
+                # 如果没有未解决的告警，则创建新的告警通知
+                if not existing_alert:
+                    # 确定严重程度
+                    severity = 'medium'
+                    if current_value >= 90:
+                        severity = 'critical'
+                    elif current_value >= 80:
+                        severity = 'high'
+                    elif current_value >= 70:
+                        severity = 'medium'
+                    else:
+                        severity = 'low'
+                    
+                    # 创建告警消息
+                    metric_names = {'cpu': 'CPU使用率', 'memory': '内存使用率', 'disk': '磁盘使用率'}
+                    message = f"主机 {ip} {metric_names[metric_type]} 超过阈值！当前值: {current_value:.2f}%, 阈值: {threshold_value:.2f}%"
+                    
+                    # 插入告警通知
+                    cursor.execute('''
+                        INSERT INTO alert_notifications (rule_id, host_ip, metric_type, current_value, threshold_value, message, severity)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (rule_id, ip, metric_type, current_value, threshold_value, message, severity))
+                    
+                    print(f"告警触发: {message}")
+        
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        print(f"告警检查错误: {e}")
+        return False
+
+def create_alert_rule(rule_name, host_ip, metric_type, threshold_value, comparison_operator):
+    """创建告警规则"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO alert_rules (rule_name, host_ip, metric_type, threshold_value, comparison_operator)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (rule_name, host_ip, metric_type, threshold_value, comparison_operator))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        print(f"创建告警规则错误: {e}")
+        return False
+
+def get_alert_rules():
+    """获取所有告警规则"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT ar.id, ar.rule_name, ar.host_ip, ar.metric_type, ar.threshold_value, 
+                   ar.comparison_operator, ar.is_active, ar.created_at
+            FROM alert_rules ar
+            ORDER BY ar.created_at DESC
+        ''')
+        
+        rules = cursor.fetchall()
+        conn.close()
+        return rules
+    except sqlite3.Error as e:
+        print(f"获取告警规则错误: {e}")
+        return []
+
+def get_active_alerts():
+    """获取未解决的活跃告警"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT an.id, an.rule_id, an.host_ip, an.metric_type, an.current_value,
+                   an.threshold_value, an.message, an.severity, an.created_at
+            FROM alert_notifications an
+            WHERE an.is_resolved = 0
+            ORDER BY an.created_at DESC
+        ''')
+        
+        alerts = cursor.fetchall()
+        conn.close()
+        return alerts
+    except sqlite3.Error as e:
+        print(f"获取活跃告警错误: {e}")
+        return []
+
+def resolve_alert(alert_id):
+    """解决告警"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE alert_notifications
+            SET is_resolved = 1, resolved_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        ''', (alert_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        print(f"解决告警错误: {e}")
+        return False
+
+def delete_alert_rule(rule_id):
+    """删除告警规则"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM alert_rules WHERE id = ?', (rule_id,))
+        cursor.execute('UPDATE alert_notifications SET is_resolved = 1 WHERE rule_id = ?', (rule_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.Error as e:
+        print(f"删除告警规则错误: {e}")
+        return False
+
 def collect_monitoring_data():
     """采集监控数据"""
     hosts = get_all_hosts()
@@ -380,6 +593,9 @@ ansible_become_pass={password}
                 # 保存到数据库 - 添加网络流量参数
                 save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online, network_rx, network_tx)
                 
+                # 检查告警
+                check_alerts(ip, cpu_usage, memory_usage, disk_usage)
+                
             else:
                 print(f"{ip} | 未成功响应: {output}")
                 # 保存离线状态，其他指标设为0
@@ -459,6 +675,131 @@ def monitor_dashboard():
     """监控大屏页面"""
     return render_template('monitor_dashboard.html')
 
+@app.route('/alerts')
+def alerts_page():
+    """告警管理页面"""
+    return render_template('alerts.html')
+
+@app.route('/historical_data')
+def historical_data_page():
+    """历史数据查询页面"""
+    return render_template('historical_data.html')
+
+# ========== 告警管理API ==========
+@app.route('/api/alert_rules', methods=['GET'])
+def api_get_alert_rules():
+    """获取所有告警规则"""
+    rules = get_alert_rules()
+    rules_list = []
+    for rule in rules:
+        rules_list.append({
+            'id': rule[0],
+            'rule_name': rule[1],
+            'host_ip': rule[2],
+            'metric_type': rule[3],
+            'threshold_value': rule[4],
+            'comparison_operator': rule[5],
+            'is_active': bool(rule[6]),
+            'created_at': rule[7]
+        })
+    return jsonify(rules_list)
+
+@app.route('/api/alert_rules', methods=['POST'])
+def api_create_alert_rule():
+    """创建告警规则"""
+    data = request.get_json()
+    rule_name = data.get('rule_name')
+    host_ip = data.get('host_ip')
+    metric_type = data.get('metric_type')
+    threshold_value = data.get('threshold_value')
+    comparison_operator = data.get('comparison_operator', '>')
+    
+    if not all([rule_name, host_ip, metric_type, threshold_value]):
+        return jsonify({'success': False, 'message': '缺少必要参数'})
+    
+    success = create_alert_rule(rule_name, host_ip, metric_type, float(threshold_value), comparison_operator)
+    if success:
+        return jsonify({'success': True, 'message': '告警规则创建成功'})
+    else:
+        return jsonify({'success': False, 'message': '创建告警规则失败'})
+
+@app.route('/api/alert_rules/<int:rule_id>', methods=['DELETE'])
+def api_delete_alert_rule(rule_id):
+    """删除告警规则"""
+    success = delete_alert_rule(rule_id)
+    if success:
+        return jsonify({'success': True, 'message': '告警规则删除成功'})
+    else:
+        return jsonify({'success': False, 'message': '删除告警规则失败'})
+
+@app.route('/api/alerts/active', methods=['GET'])
+def api_get_active_alerts():
+    """获取未解决的活跃告警"""
+    alerts = get_active_alerts()
+    alerts_list = []
+    for alert in alerts:
+        alerts_list.append({
+            'id': alert[0],
+            'rule_id': alert[1],
+            'host_ip': alert[2],
+            'metric_type': alert[3],
+            'current_value': alert[4],
+            'threshold_value': alert[5],
+            'message': alert[6],
+            'severity': alert[7],
+            'created_at': alert[8]
+        })
+    return jsonify(alerts_list)
+
+@app.route('/api/alerts/<int:alert_id>/resolve', methods=['POST'])
+def api_resolve_alert(alert_id):
+    """解决告警"""
+    success = resolve_alert(alert_id)
+    if success:
+        return jsonify({'success': True, 'message': '告警已解决'})
+    else:
+        return jsonify({'success': False, 'message': '解决告警失败'})
+
+# ========== 历史数据查询API ==========
+@app.route('/api/historical_data', methods=['GET'])
+def api_get_historical_data():
+    """获取历史监控数据"""
+    ip = request.args.get('ip')
+    start_time = request.args.get('start_time')
+    end_time = request.args.get('end_time')
+    metric_type = request.args.get('metric_type', 'all')  # cpu, memory, disk, network, or all
+    
+    if not ip or not start_time or not end_time:
+        return jsonify({'success': False, 'message': '缺少必要参数'})
+    
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 构建查询
+        if metric_type == 'all':
+            cursor.execute('''
+                SELECT cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time
+                FROM monitoring_data
+                WHERE ip = ? AND check_time BETWEEN ? AND ?
+                ORDER BY check_time ASC
+            ''', (ip, start_time, end_time))
+        else:
+            cursor.execute('''
+                SELECT {metric}, check_time
+                FROM monitoring_data
+                WHERE ip = ? AND check_time BETWEEN ? AND ?
+                ORDER BY check_time ASC
+            '''.format(metric=metric_type), (ip, start_time, end_time))
+        
+        data = cursor.fetchall()
+        conn.close()
+        
+        return jsonify({'success': True, 'data': data})
+    except sqlite3.Error as e:
+        print(f"查询历史数据错误: {e}")
+        return jsonify({'success': False, 'message': '查询失败'})
+
 if __name__ == '__main__':
     # 初始化数据库
     init_db()
@@ -468,4 +809,5 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     app.run(host='0.0.0.0', port=80)
+
 
