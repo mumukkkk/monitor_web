@@ -37,13 +37,15 @@ def init_db():
         )
     ''')
     
-    # 创建监控数据表
+    # 创建监控数据表 - 添加网络流量字段
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS monitoring_data (
             ip TEXT NOT NULL,
             cpu_usage REAL,
             memory_usage REAL,
             disk_usage REAL,
+            network_rx REAL DEFAULT 0,
+            network_tx REAL DEFAULT 0,
             is_online INTEGER DEFAULT 0,
             check_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (ip, check_time)
@@ -244,16 +246,16 @@ def get_monitoring_data():
         print(f"数据库错误: {e}")
         return []
 
-def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0):
+def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0, network_rx=0, network_tx=0):
     """保存监控数据到数据库"""
     try:
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO monitoring_data (ip, cpu_usage, memory_usage, disk_usage, is_online)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (ip, cpu_usage, memory_usage, disk_usage, is_online))
+            INSERT INTO monitoring_data (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online))
         
         conn.commit()
         conn.close()
@@ -294,53 +296,114 @@ ansible_become_pass={password}
                 f.write(inventory_content)
             
             # 执行ping命令检查上线情况
-            ping_cmd = ["ansible", ip, "-i" ,"ansible_inventory", "-m", "ping"]
-            result = subprocess.run(ping_cmd, check=True, capture_output=True, text=True)
+            ping_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "ping"]
+            result = subprocess.run(ping_cmd, capture_output=True, text=True)
             output = result.stdout.strip()
-            if "pong" in output:
+            
+            if "SUCCESS" in output and "pong" in output:
                 print(f"{ip} | 成功响应")
                 is_online = 1
-                # 执行Ansible命令获取CPU使用率
-                cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
-                        "-a", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"]
-                cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
-                cpu_usage = float(cpu_result.stdout.strip().split('\n')[-1]) if cpu_result.returncode == 0 else 0.0
-            
-                # 执行Ansible命令获取内存使用率
-                memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
-            
-                memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
-
-                memory_usage = float(memory_result.stdout.strip().split('\n')[-1]) if memory_result.returncode == 0 else 0.0
-            
-
-                # 执行Ansible命令获取磁盘使用率
-                disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
-            
-                disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
                 
-                disk_usage = float(disk_result.stdout.strip().split('\n')[-1]) if disk_result.returncode == 0 else 0.0
-            
+                try:
+                    # 执行Ansible命令获取CPU使用率
+                    cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                            "-a", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"]
+                    cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
+                    cpu_output = cpu_result.stdout.strip().split('\n')[-1]
+                    cpu_usage = float(cpu_output) if cpu_result.returncode == 0 and cpu_output.replace('.', '').isdigit() else 0.0
+                except:
+                    cpu_usage = 0.0
+                
+                try:
+                    # 执行Ansible命令获取内存使用率
+                    memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  
+                            "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
+                    memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
+                    memory_output = memory_result.stdout.strip().split('\n')[-1]
+                    memory_usage = float(memory_output) if memory_result.returncode == 0 and memory_output.replace('.', '').isdigit() else 0.0
+                except:
+                    memory_usage = 0.0
+                
+                try:
+                    # 执行Ansible命令获取磁盘使用率
+                    disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                            "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
+                    disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
+                    disk_output = disk_result.stdout.strip().split('\n')[-1]
+                    disk_usage = float(disk_output) if disk_result.returncode == 0 and disk_output.replace('.', '').isdigit() else 0.0
+                except:
+                    disk_usage = 0.0
+                
+                # ========== 修改后的网络流量数据采集 ==========
+                try:
+                    # 执行Ansible命令获取网络流量数据
+                    network_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                                "-a", "cat /proc/net/dev | grep -E '(eth0|ens|enp)' | head -1 | awk '{print $2\" \"$10}'"]
+                    network_result = subprocess.run(network_cmd, capture_output=True, text=True)
+                    network_output = network_result.stdout.strip()
+                    
+                    if network_result.returncode == 0 and network_output:
+                        # 处理Ansible输出，提取数字部分
+                        # Ansible输出格式通常是: "192.168.1.100 | SUCCESS | rc=0 >>\n12345 67890"
+                        lines = network_output.split('\n')
+                        # 取最后一行，应该是数字
+                        last_line = lines[-1].strip()
+                        
+                        # 检查是否是数字行
+                        if last_line.replace(' ', '').isdigit():
+                            rx_bytes, tx_bytes = map(int, last_line.split())
+                            
+                            # 计算网络流量（转换为MB）
+                            network_rx = rx_bytes / 1024 / 1024  # 转换为MB
+                            network_tx = tx_bytes / 1024 / 1024  # 转换为MB
+                            
+                            print(f"采集到 {ip} 的网络流量: RX={network_rx:.2f}MB, TX={network_tx:.2f}MB")
+                        else:
+                            # 如果输出格式不对，标记为采集失败
+                            print(f"采集 {ip} 网络流量数据失败：输出格式不正确")
+                            network_rx = 0.0
+                            network_tx = 0.0
+                    else:
+                        # 如果获取失败，标记为采集失败
+                        print(f"采集 {ip} 网络流量数据失败：命令执行失败")
+                        network_rx = 0.0
+                        network_tx = 0.0
+                except Exception as e:
+                    print(f"采集 {ip} 网络流量数据时出错: {e}")
+                    # 网络流量数据采集失败，使用0值
+                    network_rx = 0.0
+                    network_tx = 0.0
+                # ========== 网络流量数据采集结束 ==========`
+                
                 print(f"采集到 {ip} 的数据: CPU={cpu_usage:.2f}%, 内存={memory_usage:.2f}%, 磁盘={disk_usage:.2f}%")
-            
-                # 保存到数据库
-                save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage)
+                
+                # 保存到数据库 - 添加网络流量参数
+                save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online, network_rx, network_tx)
+                
             else:
-                print(f"{ip} | 未成功响应")
+                print(f"{ip} | 未成功响应: {output}")
                 # 保存离线状态，其他指标设为0
                 is_online = 0
-                save_monitoring_data(ip, 0.0, 0.0, 0.0, is_online)
-                continue
+                save_monitoring_data(ip, 0.0, 0.0, 0.0, is_online, 0.0, 0.0)
+                
         except Exception as e:
             print(f"采集 {ip} 数据时出错: {e}")
+            # 保存错误状态
+            save_monitoring_data(ip, 0.0, 0.0, 0.0, 0, 0.0, 0.0)
+    
     # 删除临时文件
+    try:
+        os.remove('ansible_inventory')
+    except:
+        pass
+
 def monitoring_loop():
     """监控循环"""
     while True:
         print(f"{datetime.now()}: 开始采集监控数据")
         collect_monitoring_data()
         print(f"{datetime.now()}: 监控数据采集完成，等待30秒")
-        time.sleep(30)
+        time.sleep(30)  # 取消注释，恢复30秒等待
 
 # 添加一个路由来查看所有主机（用于调试）
 @app.route('/hosts')
@@ -352,6 +415,50 @@ def show_hosts():
     html += "</table><br><a href='/'>返回主页</a>"
     return html
 
+@app.route('/get_real_time_data')
+def get_real_time_data():
+    """获取所有主机的实时监控数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取每个主机的最新监控数据
+        cursor.execute('''
+            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, md.network_rx, md.network_tx, md.is_online, md.check_time
+            FROM monitoring_data md
+            INNER JOIN (
+                SELECT ip, MAX(check_time) as latest_time
+                FROM monitoring_data
+                GROUP BY ip
+            ) latest ON md.ip = latest.ip AND md.check_time = latest.latest_time
+        ''')
+        
+        data = cursor.fetchall()
+        conn.close()
+        
+        # 转换为字典格式便于前端使用
+        result = {}
+        for row in data:
+            result[row[0]] = {
+                'cpu_usage': row[1],
+                'memory_usage': row[2],
+                'disk_usage': row[3],
+                'network_rx': row[4],
+                'network_tx': row[5],
+                'is_online': row[6],
+                'check_time': row[7]
+            }
+        
+        return jsonify(result)
+    except sqlite3.Error as e:
+        print(f"数据库错误: {e}")
+        return jsonify({})  # 修复这行，移除多余的 ({})
+
+@app.route('/monitor_dashboard')
+def monitor_dashboard():
+    """监控大屏页面"""
+    return render_template('monitor_dashboard.html')
+
 if __name__ == '__main__':
     # 初始化数据库
     init_db()
@@ -361,3 +468,4 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     app.run(host='0.0.0.0', port=80)
+

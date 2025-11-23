@@ -102,10 +102,153 @@
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
+        .status-online {
+        color: #4CAF50;
+        font-weight: bold;
+        }
+        .status-offline {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .usage-low {
+            color: #4CAF50;
+        }
+        .usage-medium {
+            color: #ff9800;
+        }
+        .usage-high {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .nav-buttons {
+        margin: 20px 0;
+        text-align: center;
+        }
+
+        .nav-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 0 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+
+        .nav-btn:hover {
+            background-color: #1976D2;
+        }
+
+        .nav-btn.active {
+            background-color: #0D47A1;
+            font-weight: bold;
+        }
+
+    /* ========== 深色/白天模式样式 ========== */
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .theme-toggle:hover {
+            background: #1976D2;
+            transform: scale(1.05);
+        }
+
+        /* 深色模式样式（与监控大屏一致） */
+        body.dark-mode {
+            background-color: #1a1a1a;
+            color: #fff;
+        }
+
+        body.dark-mode .server-list {
+            background-color: #2d2d2d;
+        }
+
+        body.dark-mode .server-list th, 
+        body.dark-mode .server-list td {
+            border: 1px solid #444;
+            color: #fff;
+        }
+
+        body.dark-mode .server-list th {
+            background-color: #3d3d3d;
+        }
+
+        body.dark-mode .server-list tr:nth-child(even) {
+            background-color: #353535;
+        }
+
+        body.dark-mode .server-list tr:hover {
+            background-color: #4d4d4d;
+        }
+
+        body.dark-mode .modal {
+            background-color: rgba(0,0,0,0.7);
+        }
+
+        body.dark-mode .modal-content {
+            background-color: #2d2d2d;
+            border: 1px solid #444;
+            color: #fff;
+        }
+
+        body.dark-mode .close {
+            color: #aaa;
+        }
+
+        body.dark-mode .close:hover {
+            color: #fff;
+        }
+
+        body.dark-mode .form-group label {
+            color: #fff;
+        }
+
+        body.dark-mode .form-group input {
+            background-color: #3d3d3d;
+            border: 1px solid #555;
+            color: #fff;
+        }
+
+        body.dark-mode .form-group input:focus {
+            border-color: #2196F3;
+        }
+
+        body.dark-mode .nav-btn {
+            background-color: #2196F3;
+        }
+
+        body.dark-mode .nav-btn.active {
+            background-color: #0D47A1;
+        }
+
+        /* 白天模式保持原有样式，不需要额外定义 */
+    /* ========== 模式切换样式结束 ========== */
     </style>
 </head>
 <body>
+    <!-- ========== 模式切换按钮 ========== -->
+    <button class="theme-toggle" id="themeToggle">🌙 深色模式</button>
+    <!-- ========== 模式切换按钮结束 ========== -->
     <h1>服务器监控系统</h1>
+
+    <div class="nav-buttons">
+        <button class="nav-btn active" onclick="showHostManagement()">主机管理</button>
+        <button class="nav-btn" onclick="showMonitorDashboard()">监控大屏</button>
+    </div>
     
     <button class="add-server-btn" onclick="openAddModal()">添加服务器</button>
     
@@ -118,7 +261,11 @@
                 <th>IP地址</th>
                 <th>用户名</th>
                 <th>端口</th>
-                <th>添加时间</th>
+                <th>状态</th>
+                <th>CPU使用率</th>
+                <th>内存使用率</th>
+                <th>磁盘使用率</th>
+                <th>最后检查时间</th>
                 <th>操作</th>
             </tr>
         </thead>
@@ -128,7 +275,13 @@
                 <td>{{ host[0] }}</td>
                 <td>{{ host[1] }}</td>
                 <td>{{ host[3] }}</td>
-                <td>{{ host[4] }}</td>
+                <td id="status-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">
+                    <span class="status-offline">离线</span>
+                </td>
+                <td id="cpu-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">0.00%</td>
+                <td id="memory-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">0.00%</td>
+                <td id="disk-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">0.00%</td>
+                <td id="checktime-{{ host[0] }}-{{ host[1] }}-{{ host[3] }}">-</td>
                 <td>
                     <button class="edit-btn" onclick="openEditModal('{{ host[0] }}', '{{ host[1] }}', '{{ host[3] }}')">编辑</button>
                     <button class="delete-btn" onclick="openDeleteModal('{{ host[0] }}', '{{ host[1] }}', '{{ host[3] }}')">删除</button>
@@ -386,6 +539,140 @@
                 showMessage('删除失败，请重试', false);
             });
         });
+        // 获取实时监控数据
+        function fetchRealTimeData() {
+            fetch('/get_real_time_data')
+                .then(response => response.json())
+                .then(data => {
+                    updateServerStatus(data);
+                })
+                .catch(error => {
+                    console.error('获取监控数据失败:', error);
+                });
+        }
+
+        // 更新服务器状态显示
+        function updateServerStatus(monitoringData) {
+            const rows = document.querySelectorAll('#server-list-body tr');
+            
+            rows.forEach(row => {
+                const ip = row.cells[0].textContent;
+                const user = row.cells[1].textContent;
+                const port = row.cells[2].textContent;
+                
+                const key = `${ip}-${user}-${port}`;
+                const statusCell = document.getElementById(`status-${key}`);
+                const cpuCell = document.getElementById(`cpu-${key}`);
+                const memoryCell = document.getElementById(`memory-${key}`);
+                const diskCell = document.getElementById(`disk-${key}`);
+                const checkTimeCell = document.getElementById(`checktime-${key}`);
+                
+                if (monitoringData[ip]) {
+                    const hostData = monitoringData[ip];
+                    
+                    // 更新状态
+                    if (hostData.is_online) {
+                        statusCell.innerHTML = '<span class="status-online">在线</span>';
+                    } else {
+                        statusCell.innerHTML = '<span class="status-offline">离线</span>';
+                    }
+                    
+                    // 更新CPU使用率
+                    const cpuUsage = hostData.cpu_usage || 0;
+                    cpuCell.textContent = cpuUsage.toFixed(2) + '%';
+                    cpuCell.className = getUsageClass(cpuUsage);
+                    
+                    // 更新内存使用率
+                    const memoryUsage = hostData.memory_usage || 0;
+                    memoryCell.textContent = memoryUsage.toFixed(2) + '%';
+                    memoryCell.className = getUsageClass(memoryUsage);
+                    
+                    // 更新磁盘使用率
+                    const diskUsage = hostData.disk_usage || 0;
+                    diskCell.textContent = diskUsage.toFixed(2) + '%';
+                    diskCell.className = getUsageClass(diskUsage);
+                    
+                    // 更新时间
+                    if (hostData.check_time) {
+                        checkTimeCell.textContent = new Date(hostData.check_time).toLocaleString();
+                    }
+                } else {
+                    // 没有数据的主机显示为离线
+                    statusCell.innerHTML = '<span class="status-offline">离线</span>';
+                    cpuCell.textContent = '0.00%';
+                    memoryCell.textContent = '0.00%';
+                    diskCell.textContent = '0.00%';
+                    checkTimeCell.textContent = '-';
+                }
+            });
+        }
+
+        // 根据使用率返回对应的CSS类
+        function getUsageClass(usage) {
+            if (usage < 70) {
+                return 'usage-low';
+            } else if (usage < 90) {
+                return 'usage-medium';
+            } else {
+                return 'usage-high';
+            }
+        }
+
+        // 页面加载完成后开始定时获取数据
+        document.addEventListener('DOMContentLoaded', function() {
+            // 立即获取一次数据
+            fetchRealTimeData();
+            
+            // 每30秒更新一次数据（与后端采集频率一致）
+            setInterval(fetchRealTimeData, 30000);
+        });
+
+        function showHostManagement() {
+        // 当前已经是主机管理页面，无需跳转
+        // 只是更新按钮状态
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelector('.nav-btn').classList.add('active');
+        }
+
+        function showMonitorDashboard() {
+        // 跳转到监控大屏页面
+        window.location.href = '/monitor_dashboard';
+        }
+
+        // ========== 深色/白天模式切换功能 ==========
+        const themeToggle = document.getElementById('themeToggle');
+        const currentTheme = localStorage.getItem('theme') || 'light'; // 默认白天模式
+
+        // 应用保存的主题
+        if (currentTheme === 'dark') {
+            document.body.classList.add('dark-mode');
+            themeToggle.textContent = '☀️ 白天模式';
+        } else {
+            document.body.classList.remove('dark-mode');
+            themeToggle.textContent = '🌙 深色模式';
+        }
+
+        // 切换主题
+        themeToggle.addEventListener('click', function() {
+            if (document.body.classList.contains('dark-mode')) {
+                // 当前是深色模式，切换到白天模式
+                document.body.classList.remove('dark-mode');
+                localStorage.setItem('theme', 'light');
+                themeToggle.textContent = '🌙 深色模式';
+            } else {
+                // 当前是白天模式，切换到深色模式
+                document.body.classList.add('dark-mode');
+                localStorage.setItem('theme', 'dark');
+                themeToggle.textContent = '☀️ 白天模式';
+            }
+        });
+        // ========== 模式切换功能结束 ==========
     </script>
 </body>
 </html>
+
+
+
+
