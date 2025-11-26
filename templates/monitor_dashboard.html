@@ -304,6 +304,7 @@
     <div class="nav-buttons">
         <button class="nav-btn" onclick="showHostManagement()">主机管理</button>
         <button class="nav-btn active" onclick="showMonitorDashboard()">监控大屏</button>
+        <button class="nav-btn" onclick="showMonitorManagement()">监控管理</button>
     </div>
 
     <div class="main-container">
@@ -381,6 +382,11 @@
             window.location.href = '/';
         }
         
+        function showMonitorManagement() {
+            window.location.href = '/monitor_management';
+        }
+
+
         function showMonitorDashboard() {
             // 当前页面，无需操作
         }
@@ -670,20 +676,27 @@
                 },
                 tooltip: {
                     trigger: 'item',
-                    formatter: '{a} <br/>{b}: {c}%'
+                    formatter: '{a} <br/>{b}: {c}% ({d}%)'
+                },
+                legend: {
+                    orient: 'vertical',
+                    right: '10%',
+                    top: 'center',
+                    textStyle: {
+                        color: getTextColor()
+                    }
                 },
                 series: [
                     {
                         name: '磁盘使用率',
                         type: 'pie',
                         radius: ['40%', '70%'],
+                        center: ['40%', '50%'], // 调整中心位置，避免与图例重叠
                         avoidLabelOverlap: false,
                         itemStyle: {
                             borderRadius: 10,
                             borderColor: document.body.classList.contains('light-mode') ? '#fff' : '#1a1a1a',
-                            borderWidth: 2,
-                            color: diskUsage >= 90 ? '#F44336' : 
-                                  diskUsage >= 70 ? '#FF9800' : '#4CAF50'
+                            borderWidth: 2
                         },
                         label: {
                             show: false,
@@ -702,8 +715,21 @@
                             show: false
                         },
                         data: [
-                            {value: diskUsage, name: '已使用'},
-                            {value: 100 - diskUsage, name: '剩余空间'}
+                            { 
+                                value: diskUsage, 
+                                name: '已使用',
+                                itemStyle: {
+                                    color: diskUsage >= 90 ? '#F44336' : 
+                                        diskUsage >= 70 ? '#FF9800' : '#4CAF50'
+                                }
+                            },
+                            { 
+                                value: 100 - diskUsage, 
+                                name: '剩余空间',
+                                itemStyle: {
+                                    color: '#e0e0e0'  // 使用灰色表示剩余空间
+                                }
+                            }
                         ]
                     }
                 ]
@@ -711,6 +737,7 @@
 
             diskRingChart.setOption(option);
         }
+
 
         // 4. 服务器状态分布饼图
         function updateStatusPieChart(data) {
@@ -739,7 +766,8 @@
                 },
                 legend: {
                     orient: 'vertical',
-                    left: 'left',
+                    left: '10%',
+                    top: 'center',
                     textStyle: {
                         color: getTextColor()
                     }
@@ -748,50 +776,79 @@
                     {
                         name: '服务器状态',
                         type: 'pie',
-                        radius: '50%',
-                        data: [
-                            { value: onlineCount, name: '在线', itemStyle: { color: '#4CAF50' } },
-                            { value: offlineCount, name: '离线', itemStyle: { color: '#F44336' } }
-                        ],
+                        radius: ['40%', '70%'],
+                        center: ['60%', '50%'], // 调整中心位置，避免与图例重叠
+                        avoidLabelOverlap: false,
+                        itemStyle: {
+                            borderRadius: 10,
+                            borderColor: document.body.classList.contains('light-mode') ? '#fff' : '#1a1a1a',
+                            borderWidth: 2
+                        },
+                        label: {
+                            show: true,
+                            position: 'outside',
+                            formatter: '{b}: {c}',
+                            color: getTextColor()
+                        },
                         emphasis: {
+                            label: {
+                                show: true,
+                                fontSize: '16',
+                                fontWeight: 'bold'
+                            },
                             itemStyle: {
                                 shadowBlur: 10,
                                 shadowOffsetX: 0,
                                 shadowColor: 'rgba(0, 0, 0, 0.5)'
                             }
                         },
-                        label: {
-                            color: getTextColor()
-                        }
+                        labelLine: {
+                            show: true
+                        },
+                        data: [
+                            { 
+                                value: onlineCount, 
+                                name: '在线', 
+                                itemStyle: { color: '#4CAF50' }
+                            },
+                            { 
+                                value: offlineCount, 
+                                name: '离线', 
+                                itemStyle: { color: '#F44336' }
+                            }
+                        ]
                     }
                 ]
             };
 
-            statusPieChart.setOption(option);
-        }
+    statusPieChart.setOption(option);
+}
+
 
         // 5. 网络流量监控图
         function updateNetworkChart(selectedHost, hostData, allHosts) {
             const networkInData = allHosts.map(host => {
                 const isSelected = host === selectedHost;
-                // 使用模拟数据或实际数据
-                const networkRx = allHostsData[host].network_rx || Math.random() * 100;
+                // 使用实际数据而不是模拟数据
+                const networkRx = allHostsData[host].network_rx || 0;
                 return {
                     value: networkRx,
                     itemStyle: {
-                        color: isSelected ? '#5470c6' : '#91cc75'
+                        color: isSelected ? '#5470c6' : '#5470c6', // 统一使用蓝色表示网络流入
+                        opacity: isSelected ? 1 : 0.6  // 选中的主机不透明度更高
                     }
                 };
             });
 
             const networkOutData = allHosts.map(host => {
                 const isSelected = host === selectedHost;
-                // 使用模拟数据或实际数据
-                const networkTx = allHostsData[host].network_tx || Math.random() * 100;
+                // 使用实际数据而不是模拟数据
+                const networkTx = allHostsData[host].network_tx || 0;
                 return {
                     value: networkTx,
                     itemStyle: {
-                        color: isSelected ? '#5470c6' : '#fac858'
+                        color: isSelected ? '#91cc75' : '#91cc75', // 统一使用绿色表示网络流出
+                        opacity: isSelected ? 1 : 0.6  // 选中的主机不透明度更高
                     }
                 };
             });
@@ -807,6 +864,13 @@
                     trigger: 'axis',
                     axisPointer: {
                         type: 'shadow'
+                    },
+                    formatter: function(params) {
+                        let result = params[0].axisValue + '<br/>';
+                        params.forEach(param => {
+                            result += `${param.seriesName}: ${param.value.toFixed(2)} MB<br/>`;
+                        });
+                        return result;
                     }
                 },
                 legend: {
@@ -845,6 +909,7 @@
                         label: {
                             show: true,
                             position: 'top',
+                            formatter: '{c}',
                             color: getTextColor()
                         }
                     },
@@ -855,6 +920,7 @@
                         label: {
                             show: true,
                             position: 'top',
+                            formatter: '{c}',
                             color: getTextColor()
                         }
                     }
@@ -863,6 +929,7 @@
 
             networkChart.setOption(option);
         }
+
 
         // 更新统计概览
         function updateStatsOverview(data) {

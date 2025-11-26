@@ -248,6 +248,7 @@
     <div class="nav-buttons">
         <button class="nav-btn active" onclick="showHostManagement()">主机管理</button>
         <button class="nav-btn" onclick="showMonitorDashboard()">监控大屏</button>
+        <button class="nav-btn" onclick="showMonitorManagement()">监控管理</button>
     </div>
     
     <button class="add-server-btn" onclick="openAddModal()">添加服务器</button>
@@ -639,6 +640,10 @@
         function showMonitorDashboard() {
         // 跳转到监控大屏页面
         window.location.href = '/monitor_dashboard';
+        }
+        function showMonitorManagement() {
+        // 跳转到监控管理页面
+        window.location.href = '/monitor_management';
         }
 
         // ========== 深色/白天模式切换功能 ==========

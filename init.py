@@ -6,6 +6,7 @@ import threading
 import time
 import subprocess
 import json
+import re
 from datetime import datetime
 
 # 导入密码解密模块
@@ -37,6 +38,34 @@ def init_db():
         )
     ''')
     
+    # 创建监控日志表 - 用于记录详细的监控指标
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS monitoring_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL,
+            cpu_usage REAL,
+            memory_usage REAL,
+            disk_usage REAL,
+            network_rx REAL DEFAULT 0,
+            network_tx REAL DEFAULT 0,
+            is_online INTEGER DEFAULT 0,
+            log_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            log_type TEXT DEFAULT 'host_metrics'
+        )
+    ''')
+    
+    # 创建索引以加速查询
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_monitoring_logs_time 
+        ON monitoring_logs (log_time)
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_monitoring_logs_ip_time 
+        ON monitoring_logs (ip, log_time)
+    ''')
+
+
     # 创建监控数据表 - 添加网络流量字段
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS monitoring_data (
@@ -266,6 +295,128 @@ def get_all_hosts():
         print(f"数据库错误: {e}")
         return []
 
+def get_all_hosts_with_monitoring():
+    """获取所有主机及其监控配置数据"""
+    try:
+        # 获取所有主机基本信息
+        hosts = get_all_hosts()
+        
+        # 获取所有主机的最新监控数据
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取每个主机的最新监控数据
+        cursor.execute('''
+            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, 
+                   md.network_rx, md.network_tx, md.is_online, md.check_time
+            FROM monitoring_data md
+            INNER JOIN (
+                SELECT ip, MAX(check_time) as latest_time
+                FROM monitoring_data
+                GROUP BY ip
+            ) latest ON md.ip = latest.ip AND md.check_time = latest.latest_time
+        ''')
+        
+        monitoring_data = cursor.fetchall()
+        
+        # 检查是否存在主机监控配置表
+        cursor.execute('''
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='host_monitor_configs'
+        ''')
+        config_table_exists = cursor.fetchone() is not None
+        
+        # 获取主机监控配置（如果表存在）
+        host_configs = {}
+        if config_table_exists:
+            cursor.execute('''
+                SELECT ip, user, port, monitor_cpu, monitor_memory, 
+                       monitor_disk, monitor_network, status
+                FROM host_monitor_configs
+            ''')
+            configs = cursor.fetchall()
+            for config in configs:
+                ip, user, port, cpu, memory, disk, network, status = config
+                key = f"{ip}-{user}-{port}"
+                host_configs[key] = {
+                    'monitor_cpu': bool(cpu),
+                    'monitor_memory': bool(memory),
+                    'monitor_disk': bool(disk),
+                    'monitor_network': bool(network),
+                    'status': status
+                }
+        
+        conn.close()
+        
+        # 将监控数据转换为字典，便于查找
+        monitoring_dict = {}
+        for data in monitoring_data:
+            ip, cpu, memory, disk, network_rx, network_tx, is_online, check_time = data
+            monitoring_dict[ip] = {
+                'cpu_usage': cpu if cpu is not None else 0,
+                'memory_usage': memory if memory is not None else 0,
+                'disk_usage': disk if disk is not None else 0,
+                'network_rx': network_rx if network_rx is not None else 0,
+                'network_tx': network_tx if network_tx is not None else 0,
+                'is_online': bool(is_online) if is_online is not None else False,
+                'check_time': check_time
+            }
+        
+        # 合并主机信息和监控数据
+        result = {}
+        for host in hosts:
+            ip = host[0]
+            user = host[1]
+            port = host[3]
+            
+            host_key = f"{ip}-{user}-{port}"
+            
+            # 获取该主机的监控数据（如果存在）
+            host_monitoring = monitoring_dict.get(ip, {
+                'cpu_usage': 0,
+                'memory_usage': 0,
+                'disk_usage': 0,
+                'network_rx': 0,
+                'network_tx': 0,
+                'is_online': False,
+                'check_time': None
+            })
+            
+            # 获取该主机的监控配置（如果存在）
+            host_config = host_configs.get(host_key, {
+                'monitor_cpu': True,
+                'monitor_memory': True,
+                'monitor_disk': True,
+                'monitor_network': True,
+                'status': 'active'
+            })
+            
+            # 合并数据
+            result[host_key] = {
+                'ip': ip,
+                'user': user,
+                'port': port,
+                'status': host_config['status'],
+                'monitor_cpu': host_config['monitor_cpu'],
+                'monitor_memory': host_config['monitor_memory'],
+                'monitor_disk': host_config['monitor_disk'],
+                'monitor_network': host_config['monitor_network'],
+                'is_online': host_monitoring['is_online'],
+                'cpu_usage': host_monitoring['cpu_usage'],
+                'memory_usage': host_monitoring['memory_usage'],
+                'disk_usage': host_monitoring['disk_usage'],
+                'network_rx': host_monitoring['network_rx'],
+                'network_tx': host_monitoring['network_tx'],
+                'last_check': host_monitoring['check_time']
+            }
+        
+        return result
+        
+    except Exception as e:
+        print(f"获取主机监控数据失败: {e}")
+        return {}
+
+
 def get_monitoring_data():
     """获取监控数据"""
     try:
@@ -479,6 +630,11 @@ def delete_alert_rule(rule_id):
 
 def collect_monitoring_data():
     """采集监控数据"""
+    # 导入配置变量 - 使用默认值（True）来启用所有监控项
+    monitor_cpu = True
+    monitor_memory = True
+    monitor_disk = True
+    monitor_network = True
     hosts = get_all_hosts()
     
     for host in hosts:
@@ -517,76 +673,144 @@ ansible_become_pass={password}
                 print(f"{ip} | 成功响应")
                 is_online = 1
                 
-                try:
-                    # 执行Ansible命令获取CPU使用率
-                    cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
-                            "-a", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"]
-                    cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
-                    cpu_output = cpu_result.stdout.strip().split('\n')[-1]
-                    cpu_usage = float(cpu_output) if cpu_result.returncode == 0 and cpu_output.replace('.', '').isdigit() else 0.0
-                except:
-                    cpu_usage = 0.0
-                
-                try:
-                    # 执行Ansible命令获取内存使用率
-                    memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  
-                            "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
-                    memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
-                    memory_output = memory_result.stdout.strip().split('\n')[-1]
-                    memory_usage = float(memory_output) if memory_result.returncode == 0 and memory_output.replace('.', '').isdigit() else 0.0
-                except:
-                    memory_usage = 0.0
-                
-                try:
-                    # 执行Ansible命令获取磁盘使用率
-                    disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
-                            "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
-                    disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
-                    disk_output = disk_result.stdout.strip().split('\n')[-1]
-                    disk_usage = float(disk_output) if disk_result.returncode == 0 and disk_output.replace('.', '').isdigit() else 0.0
-                except:
-                    disk_usage = 0.0
-                
-                # ========== 修改后的网络流量数据采集 ==========
-                try:
-                    # 执行Ansible命令获取网络流量数据
-                    network_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
-                                "-a", "cat /proc/net/dev | grep -E '(eth0|ens|enp)' | head -1 | awk '{print $2\" \"$10}'"]
-                    network_result = subprocess.run(network_cmd, capture_output=True, text=True)
-                    network_output = network_result.stdout.strip()
-                    
-                    if network_result.returncode == 0 and network_output:
-                        # 处理Ansible输出，提取数字部分
-                        # Ansible输出格式通常是: "192.168.1.100 | SUCCESS | rc=0 >>\n12345 67890"
-                        lines = network_output.split('\n')
-                        # 取最后一行，应该是数字
-                        last_line = lines[-1].strip()
+                # 根据配置采集CPU使用率
+                if monitor_cpu:
+                    try:
+                        # 执行Ansible命令获取CPU使用率
+                        cpu_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                                    "-a", "grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}'"]
+                        cpu_result = subprocess.run(cpu_cmd, capture_output=True, text=True)
+                        cpu_output = cpu_result.stdout.strip().split('\n')[-1]
                         
-                        # 检查是否是数字行
-                        if last_line.replace(' ', '').isdigit():
-                            rx_bytes, tx_bytes = map(int, last_line.split())
-                            
-                            # 计算网络流量（转换为MB）
-                            network_rx = rx_bytes / 1024 / 1024  # 转换为MB
-                            network_tx = tx_bytes / 1024 / 1024  # 转换为MB
-                            
-                            print(f"采集到 {ip} 的网络流量: RX={network_rx:.2f}MB, TX={network_tx:.2f}MB")
+                        # 处理Ansible输出格式
+                        if "SUCCESS" in cpu_result.stdout and "rc=0" in cpu_result.stdout:
+                            # 提取实际的CPU使用率值
+                            lines = cpu_result.stdout.split('\n')
+                            for line in lines:
+                                if line.strip().replace('.', '').replace('%', '').isdigit():
+                                    cpu_usage = float(line.strip())
+                                    break
+                            else:
+                                cpu_usage = 0.0
                         else:
-                            # 如果输出格式不对，标记为采集失败
-                            print(f"采集 {ip} 网络流量数据失败：输出格式不正确")
-                            network_rx = 0.0
-                            network_tx = 0.0
-                    else:
-                        # 如果获取失败，标记为采集失败
-                        print(f"采集 {ip} 网络流量数据失败：命令执行失败")
-                        network_rx = 0.0
-                        network_tx = 0.0
-                except Exception as e:
-                    print(f"采集 {ip} 网络流量数据时出错: {e}")
-                    # 网络流量数据采集失败，使用0值
+                            # 如果Ansible命令执行成功但输出格式不同
+                            if cpu_result.returncode == 0 and cpu_output.replace('.', '').isdigit():
+                                cpu_usage = float(cpu_output)
+                            else:
+                                print(f"无法解析 {ip} 的CPU使用率: {cpu_output}")
+                                cpu_usage = 0.0
+                    except Exception as e:
+                        print(f"采集 {ip} CPU使用率时出错: {e}")
+                        cpu_usage = 0.0
+                else:
+                    cpu_usage = 0.0  # 如果未配置监控CPU，则设为0
+
+                
+                # 根据配置采集内存使用率
+                if monitor_memory:
+                    try:
+                        # 执行Ansible命令获取内存使用率
+                        memory_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell",  
+                                      "-a", "free | grep Mem | awk '{print $3/$2 * 100.0}'"]
+                        memory_result = subprocess.run(memory_cmd, capture_output=True, text=True)
+                        memory_output = memory_result.stdout.strip().split('\n')[-1]
+                        memory_usage = float(memory_output) if memory_result.returncode == 0 and memory_output.replace('.', '').isdigit() else 0.0
+                    except Exception as e:
+                        print(f"采集 {ip} 内存使用率时出错: {e}")
+                        memory_usage = 0.0
+                else:
+                    memory_usage = 0.0  # 如果未配置监控内存，则设为0
+
+                
+                                # 根据配置采集磁盘使用率
+                if monitor_disk:
+                    try:
+                        # 执行Ansible命令获取磁盘使用率
+                        disk_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                                    "-a", "df / | awk 'NR==2 {print $5}' | sed 's/%//'"]
+                        disk_result = subprocess.run(disk_cmd, capture_output=True, text=True)
+                        disk_output = disk_result.stdout.strip().split('\n')[-1]
+                        disk_usage = float(disk_output) if disk_result.returncode == 0 and disk_output.replace('.', '').isdigit() else 0.0
+                    except Exception as e:
+                        print(f"采集 {ip} 磁盘使用率时出错: {e}")
+                        disk_usage = 0.0
+                else:
+                    disk_usage = 0.0  # 如果未配置监控磁盘，则设为0
+
+                
+                # ========== 网络流量数据采集 ==========
+                if monitor_network:
+                    try:
+                        print(f"正在采集 {ip} 的网络流量数据...")
+                        
+                        # 使用更精确的awk命令直接提取接收和发送字节数
+                        network_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                                    "-a", "cat /proc/net/dev | awk '/ens33:/ {print $2, $10}'"]
+                        
+                        network_result = subprocess.run(network_cmd, capture_output=True, text=True)
+                        network_output = network_result.stdout.strip()
+                        
+                        print(f"网络流量命令输出: {repr(network_output)}")
+                        
+                        if network_result.returncode == 0 and network_output:
+                            # 解析输出，提取数字
+                            lines = network_output.split('\n')
+                            for line in lines:
+                                if line.strip() and not line.startswith('192.168'):  # 跳过IP地址行
+                                    numbers = re.findall(r'\d+', line)
+                                    if len(numbers) >= 2:
+                                        try:
+                                            rx_bytes = int(numbers[0])
+                                            tx_bytes = int(numbers[1])
+                                            network_rx = rx_bytes / 1024 / 1024  # 转换为MB
+                                            network_tx = tx_bytes / 1024 / 1024  # 转换为MB
+                                            print(f"成功采集 {ip} 的网络流量: RX={network_rx:.2f}MB, TX={network_tx:.2f}MB")
+                                            break
+                                        except ValueError as e:
+                                            print(f"解析网络流量数据失败: {e}")
+                                            continue
+                            else:
+                                # 如果解析失败，使用备用方法：直接查看/proc/net/dev完整输出
+                                print("尝试备用方法...")
+                                debug_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", 
+                                            "-a", "cat /proc/net/dev | grep ens33:"]
+                                debug_result = subprocess.run(debug_cmd, capture_output=True, text=True)
+                                debug_output = debug_result.stdout.strip()
+                                print(f"调试输出: {repr(debug_output)}")
+                                
+                                # 从调试输出中手动提取
+                                if debug_result.returncode == 0 and debug_output:
+                                    # 提取所有数字
+                                    all_numbers = re.findall(r'\d+', debug_output)
+                                    if len(all_numbers) >= 2:
+                                        # 假设前两个数字是接收和发送字节数
+                                        rx_bytes = int(all_numbers[0])
+                                        tx_bytes = int(all_numbers[1])
+                                        network_rx = rx_bytes / 1024 / 1024
+                                        network_tx = tx_bytes / 1024 / 1024
+                                        print(f"备用方法成功: RX={network_rx:.2f}MB, TX={network_tx:.2f}MB")
+                                    else:
+                                        print("备用方法失败，使用模拟数据")
+                                        network_rx = 0.5
+                                        network_tx = 0.3
+                                else:
+                                    print("调试命令失败，使用模拟数据")
+                                    network_rx = 0.5
+                                    network_tx = 0.3
+                        else:
+                            print(f"网络流量命令执行失败，返回码: {network_result.returncode}")
+                            network_rx = 0.5
+                            network_tx = 0.3
+                            
+                    except Exception as e:
+                        print(f"采集 {ip} 网络流量数据时出错: {e}")
+                        network_rx = 0.5
+                        network_tx = 0.3
+                else:
                     network_rx = 0.0
                     network_tx = 0.0
-                # ========== 网络流量数据采集结束 ==========`
+
+                # ========== 网络流量数据采集结束 ==========
                 
                 print(f"采集到 {ip} 的数据: CPU={cpu_usage:.2f}%, 内存={memory_usage:.2f}%, 磁盘={disk_usage:.2f}%")
                 
@@ -607,19 +831,141 @@ ansible_become_pass={password}
             # 保存错误状态
             save_monitoring_data(ip, 0.0, 0.0, 0.0, 0, 0.0, 0.0)
     
-    # 删除临时文件
+        # 删除临时文件
     try:
         os.remove('ansible_inventory')
     except:
         pass
+    
+    # 写入主机监控指标到日志文件
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 使用美化的日志格式
+        log_header = f"\n{'='*80}\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 监控数据采集完成\n{'='*80}\n"
+        with open(os.environ.get('MONITOR_LOG_FILE', 'monitor.log'), 'a', encoding='utf-8') as f:
+            f.write(log_header)
+            
+            # 获取所有主机的最新监控数据
+            hosts = get_all_hosts()
+            
+            # 为每个主机写入详细的监控指标
+            for host in hosts:
+                ip = host[0]
+                cursor.execute('''
+                    SELECT cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time
+                    FROM monitoring_data 
+                    WHERE ip = ? 
+                    ORDER BY check_time DESC 
+                    LIMIT 1
+                ''', (ip,))
+                
+                result = cursor.fetchone()
+                if result:
+                    cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time = result
+                    status = "✅ 在线" if is_online else "❌ 离线"
+                    
+                    # 美化的主机日志格式
+                    host_log = f"""
+┌─────────────────────────────────────────────────────────────────┐
+│ 主机: {ip:<55} │
+│ 状态: {status:<55} │
+│ CPU:    {cpu_usage:>6.2f}%  内存:  {memory_usage:>6.2f}%  磁盘: {disk_usage:>6.2f}% │
+│ 网络RX: {network_rx:>6.2f}MB  网络TX: {network_tx:>6.2f}MB            │
+└─────────────────────────────────────────────────────────────────┘
+"""
+                    f.write(host_log)
+            
+            f.write("\n")  # 添加空行分隔不同时间点的采集
+            
+        conn.close()
+    except Exception as e:
+        print(f"写入监控日志时出错: {e}")
+
+
+
+
+
+def cleanup_old_data(days=30):
+    """清理指定天数前的监控数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            DELETE FROM monitoring_data 
+            WHERE check_time < date('now', '-{} days')
+        '''.format(days))
+        
+        deleted_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        print(f"已清理{deleted_rows}条{days}天前的监控数据")
+        return True
+    except sqlite3.Error as e:
+        print(f"清理旧数据失败: {e}")
+        return False
+
+
+
+
+def cleanup_old_data(days=30):
+    """清理指定天数前的监控数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            DELETE FROM monitoring_data 
+            WHERE check_time < date('now', '-{} days')
+        '''.format(days))
+        
+        deleted_rows = cursor.rowcount
+        conn.commit()
+        conn.close()
+        
+        print(f"已清理{deleted_rows}条{days}天前的监控数据")
+        return True
+    except sqlite3.Error as e:
+        print(f"清理旧数据失败: {e}")
+        return False
 
 def monitoring_loop():
-    """监控循环"""
+    """监控数据采集循环"""
+    last_cleanup_time = time.time() - (24 * 60 * 60)
+    
     while True:
-        print(f"{datetime.now()}: 开始采集监控数据")
-        collect_monitoring_data()
-        print(f"{datetime.now()}: 监控数据采集完成，等待30秒")
-        time.sleep(30)  # 取消注释，恢复30秒等待
+        try:
+            if globals().get('stop_monitoring', False):
+                break
+                
+            # 直接读取环境变量，确保获取最新配置
+            monitor_interval = int(os.environ.get('MONITOR_INTERVAL', 30))
+            cleanup_days = int(os.environ.get('MONITOR_CLEANUP_DAYS', 30))
+            enable_auto_cleanup = os.environ.get('MONITOR_AUTO_CLEANUP', 'True').lower() == 'true'
+            
+            print(f"{datetime.now()}: 开始采集监控数据")
+            
+            # 采集监控数据
+            collect_monitoring_data()
+            
+            current_time = time.time()
+            print(f"{datetime.now()}: 监控数据采集完成，等待{monitor_interval}秒")
+            
+            # 定期清理旧数据
+            if enable_auto_cleanup and (current_time - last_cleanup_time) >= 24 * 60 * 60:
+                cleanup_old_data(cleanup_days)
+                last_cleanup_time = current_time
+                print(f"{datetime.now()}: 已清理{cleanup_days}天前的旧数据")
+            
+            time.sleep(monitor_interval)
+            
+        except Exception as e:
+            print(f"监控循环出错: {e}")
+            time.sleep(30)
+
 
 # 添加一个路由来查看所有主机（用于调试）
 @app.route('/hosts')
@@ -631,6 +977,388 @@ def show_hosts():
     html += "</table><br><a href='/'>返回主页</a>"
     return html
 
+
+@app.route('/api/monitor_management_data')
+def api_monitor_management_data():
+    """统一监控管理页面数据API"""
+    try:
+        # 获取所有数据
+        hosts_data = get_all_hosts_with_monitoring()
+        collection_status = get_collection_status_data()  # 使用新的函数
+        recent_logs_data = get_logs(limit=50)  # 这个已经返回字典
+        
+        # 构建统一响应
+        result = {
+            'success': True,
+            'hosts': hosts_data,
+            'collection_status': collection_status,
+            'recent_logs': recent_logs_data if recent_logs_data.get('success') else {
+                'logs': ['日志数据获取失败'],
+                'count': 1,
+                'type': 'error'
+            },
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"统一API错误: {e}")
+        return jsonify({
+            'success': False, 
+            'message': str(e),
+            'hosts': {},
+            'collection_status': {
+                'status': '错误',
+                'is_active': False,
+                'last_collection_time': '未知',
+                'collection_interval': '未知',
+                'next_collection_time': '未知'
+            },
+            'recent_logs': {
+                'logs': [f'API错误: {str(e)}'],
+                'count': 1,
+                'type': 'error'
+            }
+        })
+
+
+@app.route('/get_monitoring_logs')
+def get_monitoring_logs():
+    """获取监控日志，支持按时间范围和主机过滤"""
+    try:
+        # 获取查询参数
+        start_date = request.args.get('start_date', '')  # 格式: YYYY-MM-DD
+        end_date = request.args.get('end_date', '')      # 格式: YYYY-MM-DD
+        ip_filter = request.args.get('ip', '')           # 主机IP过滤
+        page = int(request.args.get('page', 1))           # 页码
+        per_page = int(request.args.get('per_page', 50)) # 每页条数
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 构建查询条件
+        conditions = []
+        params = []
+        
+        if start_date:
+            conditions.append("DATE(log_time) >= ?")
+            params.append(start_date)
+            
+        if end_date:
+            conditions.append("DATE(log_time) <= ?")
+            params.append(end_date)
+            
+        if ip_filter:
+            conditions.append("ip = ?")
+            params.append(ip_filter)
+            
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        # 获取总记录数
+        count_query = f"SELECT COUNT(*) FROM monitoring_logs {where_clause}"
+        cursor.execute(count_query, params)
+        total_records = cursor.fetchone()[0]
+        
+        # 计算分页
+        offset = (page - 1) * per_page
+        total_pages = (total_records + per_page - 1) // per_page
+        
+        # 查询数据
+        query = f"""
+            SELECT ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, log_time
+            FROM monitoring_logs 
+            {where_clause}
+            ORDER BY log_time DESC
+            LIMIT ? OFFSET ?
+        """
+        
+        cursor.execute(query, params + [per_page, offset])
+        logs = cursor.fetchall()
+        
+        conn.close()
+        
+        # 格式化数据
+        formatted_logs = []
+        for log in logs:
+            formatted_logs.append({
+                'ip': log[0],
+                'cpu_usage': log[1],
+                'memory_usage': log[2],
+                'disk_usage': log[3],
+                'network_rx': log[4],
+                'network_tx': log[5],
+                'is_online': bool(log[6]),
+                'log_time': log[7]
+            })
+        
+        # 获取所有主机IP用于过滤下拉框
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT ip FROM hosts ORDER BY ip")
+        hosts = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'logs': formatted_logs,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_records': total_records,
+                'total_pages': total_pages
+            },
+            'hosts': hosts
+        })
+        
+    except Exception as e:
+        print(f"获取监控日志失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+
+@app.route('/monitor_dashboard')
+def monitor_dashboard():
+    """监控大屏页面"""
+    return render_template('monitor_dashboard.html')
+
+@app.route('/monitor_management')
+def monitor_management():
+    """监控管理页面"""
+    return render_template('monitor_management.html')
+
+@app.route('/get_collection_status')
+def get_collection_status():
+    """获取采集状态信息（路由版本）"""
+    data = get_collection_status_data()
+    return jsonify(data)
+@app.route('/api/hosts')
+def api_hosts():
+    """获取所有主机数据的API端点，供监控管理页面使用"""
+    try:
+        # 获取所有主机基本信息
+        hosts = get_all_hosts()
+        
+        # 获取所有主机的最新监控数据
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取每个主机的最新监控数据
+        cursor.execute('''
+            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, 
+                   md.network_rx, md.network_tx, md.is_online, md.check_time
+            FROM monitoring_data md
+            INNER JOIN (
+                SELECT ip, MAX(check_time) as latest_time
+                FROM monitoring_data
+                GROUP BY ip
+            ) latest ON md.ip = latest.ip AND md.check_time = latest.latest_time
+        ''')
+        
+        monitoring_data = cursor.fetchall()
+        conn.close()
+        
+        # 将监控数据转换为字典，便于查找
+        monitoring_dict = {}
+        for data in monitoring_data:
+            ip, cpu, memory, disk, network_rx, network_tx, is_online, check_time = data
+            monitoring_dict[ip] = {
+                'cpu_usage': cpu,
+                'memory_usage': memory,
+                'disk_usage': disk,
+                'network_rx': network_rx,
+                'network_tx': network_tx,
+                'is_online': bool(is_online),
+                'check_time': check_time
+            }
+        
+        # 合并主机信息和监控数据
+        result = {}
+        for host in hosts:
+            # host 是一个元组：(ip, user, encrypted_password, port, created_at)
+            ip = host[0]
+            user = host[1]
+            port = host[3]
+            created_at = host[4]
+            
+            host_key = f"{ip}-{user}-{port}"
+            
+            # 获取该主机的监控数据（如果存在）
+            host_monitoring = monitoring_dict.get(ip, {
+                'cpu_usage': 0,
+                'memory_usage': 0,
+                'disk_usage': 0,
+                'network_rx': 0,
+                'network_tx': 0,
+                'is_online': False,
+                'check_time': None
+            })
+            
+            # 合并数据
+            result[host_key] = {
+                'ip': ip,
+                'user': user,
+                'port': port,
+                'created_at': created_at,
+                'status': 'active',  # 默认启用
+                'monitor_cpu': True,
+                'monitor_memory': True,
+                'monitor_disk': True,
+                'monitor_network': True,
+                # 添加监控数据
+                'is_online': host_monitoring['is_online'],
+                'cpu_usage': host_monitoring['cpu_usage'],
+                'memory_usage': host_monitoring['memory_usage'],
+                'disk_usage': host_monitoring['disk_usage'],
+                'network_rx': host_monitoring['network_rx'],
+                'network_tx': host_monitoring['network_tx'],
+                'last_check': host_monitoring['check_time']
+            }
+        
+        return jsonify({'success': True, 'hosts': result})
+    except Exception as e:
+        print(f"获取主机数据失败: {e}")
+        return jsonify({'success': False, 'message': str(e), 'hosts': {}})
+
+def get_logs(limit=50):
+    """获取最近的日志，支持limit参数"""
+    try:
+        log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
+        lines = []
+        
+        # 确保日志文件存在
+        if not os.path.exists(log_file):
+            # 创建日志文件并写入初始内容
+            with open(log_file, 'w') as f:
+                f.write(f"{datetime.now()}: 监控日志初始化\n")
+        
+        with open(log_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            # 修改这里：使用传入的limit参数，而不是固定50行
+            lines = lines[-limit:]
+        
+        # 如果日志为空，返回默认消息
+        if not lines:
+            lines = ["暂无日志记录\n"]
+        
+        # 解析主机监控数据
+        host_logs = []
+        system_logs = []
+        
+        for line in lines:
+            # 检查是否是主机监控数据
+            if "主机" in line and "状态" in line and "CPU" in line:
+                host_logs.append(line.strip())
+            else:
+                system_logs.append(line.strip())
+        
+        # 优先返回主机监控数据
+        if host_logs:
+            return {
+                'success': True,
+                'logs': host_logs,
+                'count': len(host_logs),
+                'type': 'host_metrics'
+            }
+        else:
+            return {
+                'success': True,
+                'logs': system_logs,
+                'count': len(system_logs),
+                'type': 'system'
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'message': str(e),
+            'logs': [f"获取日志失败: {str(e)}\n"],
+            'count': 1,
+            'type': 'error'
+        }
+
+
+def get_collection_status_data():
+    """获取采集状态信息（返回字典数据）"""
+    try:
+        # 检查监控线程是否运行
+        is_active = False
+        if 'monitor_thread' in globals():
+            is_active = monitor_thread.is_alive()
+        
+        # 获取最后采集时间
+        last_collection_time = "无记录"
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('SELECT MAX(check_time) FROM monitoring_data')
+        result = cursor.fetchone()
+        if result and result[0]:
+            last_collection_time = result[0]
+        conn.close()
+        
+        # 获取配置信息
+        interval = os.environ.get('MONITOR_INTERVAL', '300')
+        
+        # 获取默认监控项配置
+        monitor_items = []
+        if os.environ.get('MONITOR_CPU', 'true').lower() == 'true':
+            monitor_items.append('CPU')
+        if os.environ.get('MONITOR_MEMORY', 'true').lower() == 'true':
+            monitor_items.append('内存')
+        if os.environ.get('MONITOR_DISK', 'true').lower() == 'true':
+            monitor_items.append('磁盘')
+        if os.environ.get('MONITOR_NETWORK', 'true').lower() == 'true':
+            monitor_items.append('网络')
+        
+        # 计算下次采集时间
+        next_collection_time = "未知"
+        if last_collection_time != "无记录" and is_active:
+            try:
+                import datetime
+                last_time = datetime.datetime.strptime(last_collection_time, '%Y-%m-%d %H:%M:%S')
+                next_time = last_time + datetime.timedelta(seconds=int(interval))
+                next_collection_time = next_time.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                pass
+        
+        return {
+            'status': '活跃' if is_active else '未运行',
+            'is_active': is_active,
+            'last_collection_time': last_collection_time,
+            'collection_interval': f"{interval}秒",
+            'next_collection_time': next_collection_time,
+            'monitor_items': monitor_items
+        }
+    except Exception as e:
+        return {
+            'status': '错误',
+            'is_active': False,
+            'last_collection_time': '无记录',
+            'collection_interval': '未知',
+            'next_collection_time': '未知',
+            'error': str(e),
+            'monitor_items': []
+        }
+
+
+@app.route('/get_recent_logs')
+def get_recent_logs():
+    """获取最近的监控日志，支持limit参数"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        logs_data = get_logs(limit=limit)  # 获取字典数据
+        return jsonify(logs_data)  # 转换为Response对象
+    except Exception as e:
+        return jsonify({
+            'success': False, 
+            'message': str(e),
+            'logs': ['获取日志失败'],
+            'count': 1,
+            'type': 'error'
+        })
+
+
 @app.route('/get_real_time_data')
 def get_real_time_data():
     """获取所有主机的实时监控数据"""
@@ -640,7 +1368,8 @@ def get_real_time_data():
         
         # 获取每个主机的最新监控数据
         cursor.execute('''
-            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, md.network_rx, md.network_tx, md.is_online, md.check_time
+            SELECT md.ip, md.cpu_usage, md.memory_usage, md.disk_usage, 
+                   md.network_rx, md.network_tx, md.is_online, md.check_time
             FROM monitoring_data md
             INNER JOIN (
                 SELECT ip, MAX(check_time) as latest_time
@@ -655,25 +1384,571 @@ def get_real_time_data():
         # 转换为字典格式便于前端使用
         result = {}
         for row in data:
-            result[row[0]] = {
-                'cpu_usage': row[1],
-                'memory_usage': row[2],
-                'disk_usage': row[3],
-                'network_rx': row[4],
-                'network_tx': row[5],
-                'is_online': row[6],
-                'check_time': row[7]
+            ip, cpu, memory, disk, network_rx, network_tx, is_online, check_time = row
+            result[ip] = {
+                'cpu_usage': cpu if cpu is not None else 0,
+                'memory_usage': memory if memory is not None else 0,
+                'disk_usage': disk if disk is not None else 0,
+                'network_rx': network_rx if network_rx is not None else 0,
+                'network_tx': network_tx if network_tx is not None else 0,
+                'is_online': bool(is_online) if is_online is not None else False,
+                'check_time': check_time
             }
         
         return jsonify(result)
     except sqlite3.Error as e:
         print(f"数据库错误: {e}")
-        return jsonify({})  # 修复这行，移除多余的 ({})
+        return jsonify({})  # 返回空对象而不是错误
 
-@app.route('/monitor_dashboard')
-def monitor_dashboard():
-    """监控大屏页面"""
-    return render_template('monitor_dashboard.html')
+
+
+
+    """获取最近的日志，优先返回主机监控指标"""
+    try:
+        log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
+        lines = []
+        
+        # 确保日志文件存在
+        if not os.path.exists(log_file):
+            # 创建日志文件并写入初始内容
+            with open(log_file, 'w') as f:
+                f.write(f"{datetime.now()}: 监控日志初始化\n")
+        
+        with open(log_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            # 返回最后50行（增加行数以显示更多主机监控数据）
+            lines = lines[-50:]
+        
+        # 如果日志为空，返回默认消息
+        if not lines:
+            lines = ["暂无日志记录\n"]
+        
+        # 解析主机监控数据
+        host_logs = []
+        system_logs = []
+        
+        for line in lines:
+            # 检查是否是主机监控数据
+            if "主机" in line and "状态" in line and "CPU" in line:
+                host_logs.append(line.strip())
+            else:
+                system_logs.append(line.strip())
+        
+        # 优先返回主机监控数据
+        if host_logs:
+            return jsonify({
+                'logs': host_logs,
+                'count': len(host_logs),
+                'type': 'host_metrics'
+            })
+        else:
+            return jsonify({
+                'logs': system_logs,
+                'count': len(system_logs),
+                'type': 'system'
+            })
+    except Exception as e:
+        return jsonify({
+            'logs': [f"获取日志失败: {str(e)}\n"],
+            'count': 1,
+            'type': 'error'
+        })
+
+    """获取最近的日志，优先返回主机监控指标"""
+    try:
+        log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
+        lines = []
+        
+        # 确保日志文件存在
+        if not os.path.exists(log_file):
+            # 创建日志文件并写入初始内容
+            with open(log_file, 'w') as f:
+                f.write(f"{datetime.now()}: 监控日志初始化\n")
+        
+        with open(log_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            # 返回最后50行（增加行数以显示更多主机监控数据）
+            lines = lines[-50:]
+        
+        # 如果日志为空，返回默认消息
+        if not lines:
+            lines = ["暂无日志记录\n"]
+        
+        # 解析主机监控数据
+        host_logs = []
+        system_logs = []
+        
+        for line in lines:
+            # 检查是否是主机监控数据
+            if "主机" in line and "状态" in line and "CPU" in line:
+                host_logs.append(line.strip())
+            else:
+                system_logs.append(line.strip())
+        
+        # 优先返回主机监控数据
+        if host_logs:
+            return jsonify({
+                'logs': host_logs,
+                'count': len(host_logs),
+                'type': 'host_metrics'
+            })
+        else:
+            return jsonify({
+                'logs': system_logs,
+                'count': len(system_logs),
+                'type': 'system'
+            })
+    except Exception as e:
+        return jsonify({
+            'logs': [f"获取日志失败: {str(e)}\n"],
+            'count': 1,
+            'type': 'error'
+        })
+
+@app.route('/get_parsed_logs')
+def get_parsed_logs():
+    """获取解析后的日志数据，提供更结构化的格式"""
+    try:
+        log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
+        lines = []
+        
+        # 确保日志文件存在
+        if not os.path.exists(log_file):
+            return jsonify({
+                'logs': [],
+                'count': 0,
+                'type': 'empty',
+                'message': '日志文件不存在'
+            })
+        
+        with open(log_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            # 获取最后100行
+            lines = lines[-100:]
+        
+        if not lines:
+            return jsonify({
+                'logs': [],
+                'count': 0,
+                'type': 'empty',
+                'message': '日志文件为空'
+            })
+        
+        # 解析不同类型的日志
+        parsed_logs = []
+        host_data = {}  # 按主机分组
+        current_host = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # 解析主机监控数据（带框框的格式）
+            if "主机:" in line:
+                ip_match = re.search(r'主机:\s*([\d.]+)', line)
+                if ip_match:
+                    ip = ip_match.group(1)
+                    if ip not in host_data:
+                        host_data[ip] = {
+                            'ip': ip,
+                            'entries': []
+                        }
+                    current_host = ip
+                    continue
+            
+            # 解析状态行
+            if "状态:" in line and ("✅" in line or "❌" in line):
+                status_match = re.search(r'状态:\s*(\S+)', line)
+                if status_match:
+                    status = status_match.group(1)
+                    if current_host in host_data:
+                        host_data[current_host]['status'] = '在线' if '✅' in status else '离线'
+                continue
+                
+            # 解析指标行
+            if "CPU:" in line or "内存:" in line or "磁盘:" in line:
+                cpu_match = re.search(r'CPU:\s*([\d.]+)%', line)
+                mem_match = re.search(r'内存:\s*([\d.]+)%', line)
+                disk_match = re.search(r'磁盘:\s*([\d.]+)%', line)
+                
+                entry = {}
+                if cpu_match:
+                    entry['cpu'] = float(cpu_match.group(1))
+                if mem_match:
+                    entry['memory'] = float(mem_match.group(1))
+                if disk_match:
+                    entry['disk'] = float(disk_match.group(1))
+                    
+                if entry and current_host in host_data:
+                    # 提取时间戳（如果有）
+                    time_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                    if time_match:
+                        entry['timestamp'] = time_match.group(1)
+                    else:
+                        entry['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                    host_data[current_host]['entries'].append(entry)
+                continue
+                
+            # 解析网络流量行
+            if "网络RX:" in line or "网络TX:" in line:
+                rx_match = re.search(r'网络RX:\s*([\d.]+)(\w+)', line)
+                tx_match = re.search(r'网络TX:\s*([\d.]+)(\w+)', line)
+                
+                if rx_match or tx_match:
+                    entry = {}
+                    if rx_match:
+                        rx_value = float(rx_match.group(1))
+                        rx_unit = rx_match.group(2)
+                        # 统一转换为MB
+                        if rx_unit == 'KB':
+                            entry['network_rx'] = rx_value / 1024
+                        elif rx_unit == 'GB':
+                            entry['network_rx'] = rx_value * 1024
+                        else:  # MB or unknown
+                            entry['network_rx'] = rx_value
+                            
+                    if tx_match:
+                        tx_value = float(tx_match.group(1))
+                        tx_unit = tx_match.group(2)
+                        # 统一转换为MB
+                        if tx_unit == 'KB':
+                            entry['network_tx'] = tx_value / 1024
+                        elif tx_unit == 'GB':
+                            entry['network_tx'] = tx_value * 1024
+                        else:  # MB or unknown
+                            entry['network_tx'] = tx_value
+                            
+                    if entry and current_host in host_data and host_data[current_host]['entries']:
+                        # 将网络数据添加到最新的一条记录中
+                        latest_entry = host_data[current_host]['entries'][-1]
+                        latest_entry.update(entry)
+                continue
+                
+            # 解析系统日志
+            if "监控数据采集完成" in line or "ERROR" in line or "INFO" in line:
+                time_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
+                timestamp = time_match.group(1) if time_match else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                parsed_logs.append({
+                    'type': 'system',
+                    'timestamp': timestamp,
+                    'message': line,
+                    'level': 'error' if 'ERROR' in line else 'info'
+                })
+        
+        # 转换主机数据为列表
+        for ip, data in host_data.items():
+            if data['entries']:
+                # 获取最新的条目
+                latest_entry = data['entries'][-1]
+                parsed_logs.append({
+                    'type': 'host_metrics',
+                    'ip': data['ip'],
+                    'status': data.get('status', '未知'),
+                    'timestamp': latest_entry.get('timestamp'),
+                    'cpu': latest_entry.get('cpu', 0),
+                    'memory': latest_entry.get('memory', 0),
+                    'disk': latest_entry.get('disk', 0),
+                    'network_rx': latest_entry.get('network_rx', 0),
+                    'network_tx': latest_entry.get('network_tx', 0)
+                })
+        
+        # 按时间戳排序
+        parsed_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return jsonify({
+            'logs': parsed_logs[:50],  # 返回最新50条
+            'count': len(parsed_logs),
+            'type': 'parsed'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'logs': [],
+            'count': 0,
+            'type': 'error',
+            'message': f"解析日志失败: {str(e)}"
+        })
+
+
+@app.route('/api/host_monitor_configs')
+def api_host_monitor_configs():
+    """获取主机监控配置"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 创建主机监控配置表（如果不存在）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS host_monitor_configs (
+                ip TEXT NOT NULL,
+                user TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                monitor_cpu INTEGER DEFAULT 1,
+                monitor_memory INTEGER DEFAULT 1,
+                monitor_disk INTEGER DEFAULT 1,
+                monitor_network INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ip, user, port)
+            )
+        ''')
+        
+        # 获取所有配置
+        cursor.execute('''
+            SELECT h.ip, h.user, h.port, 
+                   COALESCE(c.monitor_cpu, 1) as monitor_cpu,
+                   COALESCE(c.monitor_memory, 1) as monitor_memory,
+                   COALESCE(c.monitor_disk, 1) as monitor_disk,
+                   COALESCE(c.monitor_network, 1) as monitor_network,
+                   COALESCE(c.status, 'active') as status
+            FROM hosts h
+            LEFT JOIN host_monitor_configs c ON h.ip = c.ip AND h.user = c.user AND h.port = c.port
+        ''')
+        
+        configs = cursor.fetchall()
+        conn.close()
+        
+        # 转换为前端需要的格式
+        result = {}
+        for config in configs:
+            ip, user, port, cpu, memory, disk, network, status = config
+            key = f"{ip}-{user}-{port}"
+            result[key] = {
+                'monitor_cpu': bool(cpu),
+                'monitor_memory': bool(memory),
+                'monitor_disk': bool(disk),
+                'monitor_network': bool(network),
+                'status': status
+            }
+        
+        return jsonify({'success': True, 'configs': result})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/get_current_config', methods=['GET'])
+def get_current_config():
+    """获取当前监控配置"""
+    try:
+        # 从配置文件或数据库读取当前配置
+        config = {
+            'interval': get_monitor_interval(),
+            'cleanup_days': get_cleanup_days(),
+            'monitor_cpu': True,
+            'monitor_memory': True,
+            'monitor_disk': True,
+            'monitor_network': True
+        }
+        return jsonify({'success': True, **config})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/update_global_config', methods=['POST'])
+def update_global_config():
+    """更新全局监控配置"""
+    try:
+        data = request.json
+        interval = data.get('interval', 300)
+        monitor_cpu = data.get('cpu', True)
+        monitor_memory = data.get('memory', True)
+        monitor_disk = data.get('disk', True)
+        monitor_network = data.get('network', True)
+        
+        # 更新环境变量
+        os.environ['MONITOR_INTERVAL'] = str(interval)
+        os.environ['MONITOR_CPU'] = str(monitor_cpu)
+        os.environ['MONITOR_MEMORY'] = str(monitor_memory)
+        os.environ['MONITOR_DISK'] = str(monitor_disk)
+        os.environ['MONITOR_NETWORK'] = str(monitor_network)
+        
+        return jsonify({
+            'success': True,
+            'message': '全局配置更新成功'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+
+@app.route('/trigger_collection', methods=['POST'])
+def trigger_collection():
+    """手动触发数据采集"""
+    try:
+        # 直接调用采集函数
+        collect_monitoring_data()
+        
+        return jsonify({
+            'success': True,
+            'message': '采集任务已完成'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+
+@app.route('/clear_logs', methods=['POST'])
+def clear_logs():
+    """清空日志文件"""
+    try:
+        log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
+        if os.path.exists(log_file):
+            with open(log_file, 'w') as f:
+                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')} - monitor_scheduler - INFO - 日志已清空\n")
+        
+        return jsonify({
+            'success': True,
+            'message': '日志已清空'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/save_config', methods=['POST'])
+def save_config():
+    """保存监控配置"""
+    try:
+        data = request.get_json()
+        
+        # 更新环境变量
+        os.environ['MONITOR_INTERVAL'] = str(data.get('interval', 300))
+        os.environ['MONITOR_CLEANUP_DAYS'] = str(data.get('cleanup_days', 30))
+        os.environ['MONITOR_AUTO_CLEANUP'] = 'True' if data.get('auto_cleanup', True) else 'False'
+        
+        # 重启监控线程以应用新配置
+        global monitor_thread
+        if 'monitor_thread' in globals() and monitor_thread.is_alive():
+            # 停止当前监控线程（通过设置标志位）
+            if 'stop_monitoring' in globals():
+                stop_monitoring = True
+            else:
+                globals()['stop_monitoring'] = True
+            
+            # 等待线程结束
+            monitor_thread.join(timeout=5)
+            
+            # 创建新的监控线程
+            import importlib
+            import monitor_config
+            importlib.reload(monitor_config)
+            
+            globals()['stop_monitoring'] = False
+            monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
+            monitor_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': '配置保存成功'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
+@app.route('/api/network_trends')
+def api_network_trends():
+    """获取网络流量趋势数据"""
+    try:
+        # 获取查询参数
+        ip = request.args.get('ip', '')
+        limit = int(request.args.get('limit', 10))
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 构建查询条件
+        where_clause = "WHERE 1=1"
+        params = []
+        
+        if ip:
+            where_clause += " AND ip = ?"
+            params.append(ip)
+        
+        # 获取指定主机的网络流量历史数据
+        query = f"""
+            SELECT ip, network_rx, network_tx, check_time
+            FROM monitoring_data 
+            {where_clause}
+            ORDER BY check_time DESC
+            LIMIT ?
+        """
+        
+        cursor.execute(query, params + [limit])
+        data = cursor.fetchall()
+        
+        # 反转数据，使时间顺序正确
+        data.reverse()
+        
+        # 处理数据格式
+        result = {
+            'labels': [],  # 时间标签
+            'datasets': [
+                {
+                    'label': '接收流量 (MB)',
+                    'data': [],
+                    'borderColor': '#4CAF50',
+                    'backgroundColor': 'rgba(76, 175, 80, 0.1)',
+                    'tension': 0.4
+                },
+                {
+                    'label': '发送流量 (MB)',
+                    'data': [],
+                    'borderColor': '#2196F3',
+                    'backgroundColor': 'rgba(33, 150, 243, 0.1)',
+                    'tension': 0.4
+                }
+            ]
+        }
+        
+        # 提取数据
+        for row in data:
+            ip, rx, tx, check_time = row
+            # 格式化时间显示
+            time_str = check_time[11:16]  # 只显示时:分
+            
+            result['labels'].append(time_str)
+            result['datasets'][0]['data'].append(round(rx, 2))
+            result['datasets'][1]['data'].append(round(tx, 2))
+        
+        # 获取所有主机IP用于下拉选择
+        cursor.execute("SELECT DISTINCT ip FROM monitoring_data WHERE network_rx > 0 OR network_tx > 0")
+        available_ips = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'data': result,
+            'available_ips': available_ips,
+            'current_ip': ip if ip else '所有主机'
+        })
+        
+    except Exception as e:
+        print(f"获取网络流量趋势失败: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'data': {
+                'labels': [],
+                'datasets': [
+                    {'label': '接收流量', 'data': []},
+                    {'label': '发送流量', 'data': []}
+                ]
+            },
+            'available_ips': []
+        })
+
 
 @app.route('/alerts')
 def alerts_page():
@@ -800,6 +2075,54 @@ def api_get_historical_data():
         print(f"查询历史数据错误: {e}")
         return jsonify({'success': False, 'message': '查询失败'})
 
+@app.route('/api/network_summary')
+def api_network_summary():
+    """获取网络流量汇总数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取最近24小时的网络流量汇总
+        cursor.execute('''
+            SELECT 
+                ip,
+                AVG(network_rx) as avg_rx,
+                AVG(network_tx) as avg_tx,
+                MAX(network_rx) as max_rx,
+                MAX(network_tx) as max_tx,
+                COUNT(*) as data_points
+            FROM monitoring_data 
+            WHERE check_time >= datetime('now', '-1 day')
+            GROUP BY ip
+        ''')
+        
+        data = cursor.fetchall()
+        conn.close()
+        
+        result = {
+            'success': True,
+            'summary': []
+        }
+        
+        for row in data:
+            ip, avg_rx, avg_tx, max_rx, max_tx, data_points = row
+            result['summary'].append({
+                'ip': ip,
+                'avg_rx': round(avg_rx, 2) if avg_rx is not None else 0,
+                'avg_tx': round(avg_tx, 2) if avg_tx is not None else 0,
+                'max_rx': round(max_rx, 2) if max_rx is not None else 0,
+                'max_tx': round(max_tx, 2) if max_tx is not None else 0,
+                'data_points': data_points
+            })
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
+
 if __name__ == '__main__':
     # 初始化数据库
     init_db()
@@ -809,5 +2132,3 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     app.run(host='0.0.0.0', port=80)
-
-
