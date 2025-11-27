@@ -2035,37 +2035,24 @@ def api_resolve_alert(alert_id):
     else:
         return jsonify({'success': False, 'message': '解决告警失败'})
 
-# ========== 修复后的历史数据查询API ==========
+# ========== 历史数据查询API ==========
 @app.route('/api/historical_data', methods=['GET'])
 def api_get_historical_data():
-    """获取历史监控数据 - 修复版本"""
+    """获取历史监控数据"""
+    ip = request.args.get('ip')
+    start_time = request.args.get('start_time')
+    end_time = request.args.get('end_time')
+    metric_type = request.args.get('metric_type', 'all')  # cpu, memory, disk, network, or all
+    
+    if not ip or not start_time or not end_time:
+        return jsonify({'success': False, 'message': '缺少必要参数'})
+    
     try:
-        # 获取查询参数
-        ip = request.args.get('ip')
-        start_time = request.args.get('start_time')
-        end_time = request.args.get('end_time')
-        metric_type = request.args.get('metric_type', 'all')  # cpu, memory, disk, network, or all
-        
-        # 参数验证
-        if not ip or not start_time or not end_time:
-            return jsonify({'success': False, 'message': '缺少必要参数: IP地址、开始时间和结束时间'})
-        
-        # 验证IP地址格式
-        ip_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-        if not ip_pattern.match(ip):
-            return jsonify({'success': False, 'message': 'IP地址格式不正确'})
-        
-        # 验证metric_type参数
-        valid_metrics = ['all', 'cpu', 'memory', 'disk', 'network']
-        if metric_type not in valid_metrics:
-            return jsonify({'success': False, 'message': 'metric_type参数无效，可选值: all, cpu, memory, disk, network'})
-        
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
         
-        # 安全构建查询 - 避免SQL注入
+        # 构建查询
         if metric_type == 'all':
-            # 查询所有指标
             cursor.execute('''
                 SELECT cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time
                 FROM monitoring_data
@@ -2073,74 +2060,66 @@ def api_get_historical_data():
                 ORDER BY check_time ASC
             ''', (ip, start_time, end_time))
         else:
-            # 根据metric_type安全选择字段
-            metric_field = {
-                'cpu': 'cpu_usage',
-                'memory': 'memory_usage', 
-                'disk': 'disk_usage',
-                'network': 'network_rx, network_tx'
-            }.get(metric_type)
-            
-            if metric_type == 'network':
-                cursor.execute(f'''
-                    SELECT {metric_field}, check_time
-                    FROM monitoring_data
-                    WHERE ip = ? AND check_time BETWEEN ? AND ?
-                    ORDER BY check_time ASC
-                ''', (ip, start_time, end_time))
-            else:
-                cursor.execute(f'''
-                    SELECT {metric_field}, check_time
-                    FROM monitoring_data
-                    WHERE ip = ? AND check_time BETWEEN ? AND ?
-                    ORDER BY check_time ASC
-                ''', (ip, start_time, end_time))
+            cursor.execute('''
+                SELECT {metric}, check_time
+                FROM monitoring_data
+                WHERE ip = ? AND check_time BETWEEN ? AND ?
+                ORDER BY check_time ASC
+            '''.format(metric=metric_type), (ip, start_time, end_time))
         
         data = cursor.fetchall()
         conn.close()
         
-        # 格式化返回数据为前端友好的格式
-        formatted_data = []
-        if metric_type == 'all':
-            for row in data:
-                cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time = row
-                formatted_data.append({
-                    'check_time': check_time,
-                    'cpu_usage': round(cpu_usage, 2) if cpu_usage is not None else 0,
-                    'memory_usage': round(memory_usage, 2) if memory_usage is not None else 0,
-                    'disk_usage': round(disk_usage, 2) if disk_usage is not None else 0,
-                    'network_rx': round(network_rx, 2) if network_rx is not None else 0,
-                    'network_tx': round(network_tx, 2) if network_tx is not None else 0,
-                    'is_online': bool(is_online) if is_online is not None else False
-                })
-        elif metric_type == 'network':
-            for row in data:
-                network_rx, network_tx, check_time = row
-                formatted_data.append({
-                    'check_time': check_time,
-                    'network_rx': round(network_rx, 2) if network_rx is not None else 0,
-                    'network_tx': round(network_tx, 2) if network_tx is not None else 0
-                })
-        else:
-            for row in data:
-                value, check_time = row
-                formatted_data.append({
-                    'check_time': check_time,
-                    metric_type: round(value, 2) if value is not None else 0
-                })
-        
-        return jsonify({
-            'success': True, 
-            'data': formatted_data,
-            'total_count': len(formatted_data)
-        })
-        
+        return jsonify({'success': True, 'data': data})
     except sqlite3.Error as e:
-        print(f"查询历史数据数据库错误: {e}")
-        return jsonify({'success': False, 'message': f'数据库查询失败: {str(e)}'})
+        print(f"查询历史数据错误: {e}")
+        return jsonify({'success': False, 'message': '查询失败'})
+
+    """获取网络流量汇总数据"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取最近24小时的网络流量汇总
+        cursor.execute('''
+            SELECT 
+                ip,
+                AVG(network_rx) as avg_rx,
+                AVG(network_tx) as avg_tx,
+                MAX(network_rx) as max_rx,
+                MAX(network_tx) as max_tx,
+                COUNT(*) as data_points
+            FROM monitoring_data 
+            WHERE check_time >= datetime('now', '-1 day')
+            GROUP BY ip
+        ''')
+        
+        data = cursor.fetchall()
+        conn.close()
+        
+        result = {
+            'success': True,
+            'summary': []
+        }
+        
+        for row in data:
+            ip, avg_rx, avg_tx, max_rx, max_tx, data_points = row
+            result['summary'].append({
+                'ip': ip,
+                'avg_rx': round(avg_rx, 2) if avg_rx is not None else 0,
+                'avg_tx': round(avg_tx, 2) if avg_tx is not None else 0,
+                'max_rx': round(max_rx, 2) if max_rx is not None else 0,
+                'max_tx': round(max_tx, 2) if max_tx is not None else 0,
+                'data_points': data_points
+            })
+        
+        return jsonify(result)
+        
     except Exception as e:
-        print(f"查询历史数据未知错误: {e}")
-        return jsonify({'success': False, 'message': f'查询失败: {str(e)}'})
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
 
 if __name__ == '__main__':
     # 初始化数据库
@@ -2216,4 +2195,3 @@ def send_alert_notification(alert_data):
     except Exception as e:
         print(f"发送通知失败: {e}")
         return False
-

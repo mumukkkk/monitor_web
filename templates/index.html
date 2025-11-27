@@ -249,6 +249,8 @@
         <button class="nav-btn active" onclick="showHostManagement()">主机管理</button>
         <button class="nav-btn" onclick="showMonitorDashboard()">监控大屏</button>
         <button class="nav-btn" onclick="showMonitorManagement()">监控管理</button>
+	    <button class="nav-btn" onclick="showAlerts()">告警管理</button>
+        <button class="nav-btn" onclick="showHistoricalData()">历史数据</button>
     </div>
     
     <button class="add-server-btn" onclick="openAddModal()">添加服务器</button>
@@ -645,6 +647,16 @@
         // 跳转到监控管理页面
         window.location.href = '/monitor_management';
         }
+        function showAlerts() {
+        // 跳转到告警管理页面
+        window.location.href = '/alerts';
+        }
+        function showHistoricalData() {
+        // 跳转到历史数据查询页面
+        window.location.href = '/historical_data';
+        }
+
+        
 
         // ========== 深色/白天模式切换功能 ==========
         const themeToggle = document.getElementById('themeToggle');

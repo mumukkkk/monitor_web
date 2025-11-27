@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史数据查询 - 服务器监控系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 20px;
+        }
+        .data-table {
+            font-size: 0.9em;
+        }
+        .metric-card {
+            transition: all 0.3s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-server"></i> 服务器监控系统
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/monitor_dashboard">监控大屏</a>
+                <a class="nav-link" href="/monitor_management">监控管理</a>
+                <a class="nav-link" href="/alerts">告警管理</a>
+                <a class="nav-link active" href="/historical_data">历史数据</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h2><i class="fas fa-chart-line text-primary"></i> 历史数据查询</h2>
+                <p class="text-muted">查询和分析历史监控数据</p>
+            </div>
+        </div>
+
+        <!-- 查询条件 -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-search"></i> 查询条件</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="queryForm" class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label">目标主机</label>
+                                <select class="form-control" id="hostSelect" required>
+                                    <!-- 主机选项将动态加载 -->
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">开始时间</label>
+                                <input type="datetime-local" class="form-control" id="startTime" required>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">结束时间</label>
+                                <input type="datetime-local" class="form-control" id="endTime" required>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">监控指标</label>
+                                <select class="form-control" id="metricType">
+                                    <option value="all">全部指标</option>
+                                    <option value="cpu">CPU使用率</option>
+                                    <option value="memory">内存使用率</option>
+                                    <option value="disk">磁盘使用率</option>
+                                    <option value="network">网络流量</option>
+                                </select>
+                            </div>
+                            <div class="col-12">
+                                <button type="button" class="btn btn-primary" onclick="queryHistoricalData()">
+                                    <i class="fas fa-search"></i> 查询数据
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" onclick="exportData()">
+                                    <i class="fas fa-download"></i> 导出数据
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据概览 -->
+        <div class="row mt-4" id="dataOverview" style="display: none;">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-bar"></i> 数据概览</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row" id="metricCards">
+                            <!-- 指标卡片将在这里动态加载 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 趋势图表 -->
+        <div class="row mt-4" id="chartsSection" style="display: none;">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-line"></i> 趋势分析</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据表格 -->
+        <div class="row mt-4" id="dataTableSection" style="display: none;">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-table"></i> 详细数据</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover data-table" id="dataTable">
+                                <thead>
+                                    <tr>
+                                        <th>时间</th>
+                                        <th>CPU使用率</th>
+                                        <th>内存使用率</th>
+                                        <th>磁盘使用率</th>
+                                        <th>网络接收</th>
+                                        <th>网络发送</th>
+                                        <th>在线状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dataTableBody">
+                                    <!-- 数据将在这里动态加载 -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <nav>
+                            <ul class="pagination justify-content-center" id="pagination">
+                                <!-- 分页控件将在这里动态加载 -->
+                            </ul>
+                        </nav>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentChart = null;
+        let currentData = [];
+        let currentPage = 1;
+        const itemsPerPage = 20;
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadHosts();
+            setDefaultTimeRange();
+        });
+
+        // 设置默认时间范围（最近24小时）
+        function setDefaultTimeRange() {
+            const now = new Date();
+            const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            
+            document.getElementById('endTime').value = now.toISOString().slice(0, 16);
+            document.getElementById('startTime').value = yesterday.toISOString().slice(0, 16);
+        }
+
+        // 加载主机列表
+        async function loadHosts() {
+            try {
+                const response = await fetch('/api/hosts');
+                const data = await response.json();
+                
+                const select = document.getElementById('hostSelect');
+                select.innerHTML = '<option value="">请选择主机</option>';
+                
+                Object.values(data.hosts).forEach(host => {
+                    const option = document.createElement('option');
+                    option.value = host.ip;
+                    option.textContent = `${host.ip} (${host.user})`;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('加载主机列表失败:', error);
+            }
+        }
+
+        // 查询历史数据
+async function queryHistoricalData() {
+    const form = document.getElementById('queryForm');
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+
+    const hostIp = document.getElementById('hostSelect').value;
+    const startTime = document.getElementById('startTime').value;
+    const endTime = document.getElementById('endTime').value;
+    const metricType = document.getElementById('metricType').value;
+
+    try {
+        // 构建查询参数
+        const params = new URLSearchParams({
+            ip: hostIp,
+            start_time: startTime,
+            end_time: endTime,
+            metric_type: metricType
+        });
+
+        const response = await fetch(`/api/historical_data?${params}`);
+        const result = await response.json();
+        
+        console.log('查询结果:', result); // 调试信息
+        
+        if (result.success) {
+            currentData = result.data;
+            console.log('数据数量:', currentData.length); // 调试信息
+            
+            if (currentData.length > 0) {
+                displayDataOverview();
+                displayTrendChart();
+                displayDataTable();
+                
+                // 显示所有数据区域
+                document.getElementById('dataOverview').style.display = 'block';
+                document.getElementById('chartsSection').style.display = 'block';
+                document.getElementById('dataTableSection').style.display = 'block';
+            } else {
+                alert('查询时间段内没有数据');
+                // 隐藏数据区域
+                document.getElementById('dataOverview').style.display = 'none';
+                document.getElementById('chartsSection').style.display = 'none';
+                document.getElementById('dataTableSection').style.display = 'none';
+            }
+        } else {
+            alert('查询失败: ' + result.message);
+        }
+    } catch (error) {
+        console.error('查询数据失败:', error);
+        alert('查询失败，请检查网络连接: ' + error.message);
+    }
+}
+
+
+        // 显示数据概览
+        function displayDataOverview() {
+            if (currentData.length === 0) {
+                document.getElementById('metricCards').innerHTML = '<div class="col-12"><div class="alert alert-info">暂无数据</div></div>';
+                return;
+            }
+
+            // 计算各项指标的平均值和最大值
+            const metrics = {
+                cpu: { values: [], avg: 0, max: 0 },
+                memory: { values: [], avg: 0, max: 0 },
+                disk: { values: [], avg: 0, max: 0 },
+                network_rx: { values: [], avg: 0, max: 0 },
+                network_tx: { values: [], avg: 0, max: 0 }
+            };
+
+            currentData.forEach(row => {
+                if (row.cpu_usage) metrics.cpu.values.push(row.cpu_usage);
+                if (row.memory_usage) metrics.memory.values.push(row.memory_usage);
+                if (row.disk_usage) metrics.disk.values.push(row.disk_usage);
+                if (row.network_rx) metrics.network_rx.values.push(row.network_rx);
+                if (row.network_tx) metrics.network_tx.values.push(row.network_tx);
+            });
+
+            // 计算统计值
+            Object.keys(metrics).forEach(key => {
+                if (metrics[key].values.length > 0) {
+                    metrics[key].avg = metrics[key].values.reduce((a, b) => a + b) / metrics[key].values.length;
+                    metrics[key].max = Math.max(...metrics[key].values);
+                }
+            });
+
+            const html = `
+                <div class="col-md-2 mb-3">
+                    <div class="card metric-card bg-primary text-white">
+                        <div class="card-body text-center">
+                            <h6>CPU使用率</h6>
+                            <h3>${metrics.cpu.avg.toFixed(1)}%</h3>
+                            <small>最高: ${metrics.cpu.max.toFixed(1)}%</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 mb-3">
+                    <div class="card metric-card bg-success text-white">
+                        <div class="card-body text-center">
+                            <h6>内存使用率</h6>
+                            <h3>${metrics.memory.avg.toFixed(1)}%</h3>
+                            <small>最高: ${metrics.memory.max.toFixed(1)}%</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 mb-3">
+                    <div class="card metric-card bg-info text-white">
+                        <div class="card-body text-center">
+                            <h6>磁盘使用率</h6>
+                            <h3>${metrics.disk.avg.toFixed(1)}%</h3>
+                            <small>最高: ${metrics.disk.max.toFixed(1)}%</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <div class="card metric-card bg-warning text-dark">
+                        <div class="card-body text-center">
+                            <h6>网络接收</h6>
+                            <h3>${metrics.network_rx.avg.toFixed(2)}MB</h3>
+                            <small>峰值: ${metrics.network_rx.max.toFixed(2)}MB</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <div class="card metric-card bg-dark text-white">
+                        <div class="card-body text-center">
+                            <h6>网络发送</h6>
+                            <h3>${metrics.network_tx.avg.toFixed(2)}MB</h3>
+                            <small>峰值: ${metrics.network_tx.max.toFixed(2)}MB</small>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('metricCards').innerHTML = html;
+        }
+
+        // 显示趋势图表
+        function displayTrendChart() {
+            if (currentData.length === 0) return;
+
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            
+            // 销毁现有图表
+            if (currentChart) {
+                currentChart.destroy();
+            }
+
+            // 准备图表数据
+            const labels = currentData.map(row => 
+                new Date(row.check_time).toLocaleTimeString('zh-CN', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                })
+            );
+
+            const datasets = [
+                {
+                    label: 'CPU使用率 (%)',
+                    data: currentData.map(row => row.cpu_usage),
+                    borderColor: '#007bff',
+                    backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y'
+                },
+                {
+                    label: '内存使用率 (%)',
+                    data: currentData.map(row => row.memory_usage),
+                    borderColor: '#28a745',
+                    backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y'
+                },
+                {
+                    label: '磁盘使用率 (%)',
+                    data: currentData.map(row => row.disk_usage),
+                    borderColor: '#17a2b8',
+                    backgroundColor: 'rgba(23, 162, 184, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y'
+                }
+            ];
+
+            currentChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            title: {
+                                display: true,
+                                text: '使用率 (%)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 显示数据表格
+        function displayDataTable(page = 1) {
+            currentPage = page;
+            const startIndex = (page - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const pageData = currentData.slice(startIndex, endIndex);
+
+            let html = '';
+            pageData.forEach(row => {
+                html += `
+                    <tr>
+                        <td>${new Date(row.check_time).toLocaleString('zh-CN')}</td>
+                        <td>${row.cpu_usage ? row.cpu_usage.toFixed(1) + '%' : 'N/A'}</td>
+                        <td>${row.memory_usage ? row.memory_usage.toFixed(1) + '%' : 'N/A'}</td>
+                        <td>${row.disk_usage ? row.disk_usage.toFixed(1) + '%' : 'N/A'}</td>
+                        <td>${row.network_rx ? row.network_rx.toFixed(2) + 'MB' : 'N/A'}</td>
+                        <td>${row.network_tx ? row.network_tx.toFixed(2) + 'MB' : 'N/A'}</td>
+                        <td>${row.is_online ? '<span class="badge bg-success">在线</span>' : '<span class="badge bg-danger">离线</span>'}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('dataTableBody').innerHTML = html;
+            displayPagination();
+        }
+
+        // 显示分页控件
+        function displayPagination() {
+            const totalPages = Math.ceil(currentData.length / itemsPerPage);
+            let html = '';
+
+            // 上一页按钮
+            html += `<li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage - 1})">上一页</a>
+            </li>`;
+
+            // 页码按钮
+            for (let i = 1; i <= totalPages; i++) {
+                html += `<li class="page-item ${i === currentPage ? 'active' : ''}">
+                    <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+                </li>`;
+            }
+
+            // 下一页按钮
+            html += `<li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage + 1})">下一页</a>
+            </li>`;
+
+            document.getElementById('pagination').innerHTML = html;
+        }
+
+        // 切换页面
+        function changePage(page) {
+            displayDataTable(page);
+        }
+
+        // 导出数据
+        function exportData() {
+            if (currentData.length === 0) {
+                alert('没有数据可导出');
+                return;
+            }
+
+            // 创建CSV内容
+            let csv = '时间,CPU使用率(%),内存使用率(%),磁盘使用率(%),网络接收(MB),网络发送(MB),在线状态\\n';
+            
+            currentData.forEach(row => {
+                csv += `"${new Date(row.check_time).toLocaleString('zh-CN')}",`;
+                csv += `${row.cpu_usage || ''},`;
+                csv += `${row.memory_usage || ''},`;
+                csv += `${row.disk_usage || ''},`;
+                csv += `${row.network_rx || ''},`;
+                csv += `${row.network_tx || ''},`;
+                csv += `${row.is_online ? '在线' : '离线'}\\n`;
+            });
+
+            // 创建下载链接
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute('href', url);
+            link.setAttribute('download', `监控数据_${new Date().toISOString().slice(0, 10)}.csv`);
+            link.style.visibility = 'hidden';
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+</body>
+</html>
+
