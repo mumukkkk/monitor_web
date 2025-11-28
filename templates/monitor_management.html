@@ -4,6 +4,7 @@
     <title>监控管理 - Server Monitor</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             /* 样式变量复用 */
@@ -27,6 +28,7 @@
             --bg-glass: rgba(30, 30, 30, 0.8);
             --border-glass: rgba(255, 255, 255, 0.08);
             --shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            --wallpaper: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
         }
 
         body {
@@ -143,15 +145,25 @@
         td { padding: 12px; border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 14px; }
         body.dark-mode td { border-bottom-color: rgba(255,255,255,0.05); }
 
-        /* 模态框 (仅用于设置壁纸) */
+        /* 模态框 */
         .modal {
             display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%;
             background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(5px); animation: fadeIn 0.2s ease;
         }
         .modal-content {
-            background-color: white; margin: 15% auto; padding: 30px; border-radius: 24px;
-            width: 400px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); position: relative;
+            background-color: white; 
+            position: fixed;  /* 改为fixed定位 */
+            top: 50%;  /* 垂直居中 */
+            left: 50%;  /* 水平居中 */
+            transform: translate(-50%, -50%);  /* 精确居中 */
+            padding: 30px; 
+            border-radius: 24px;
+            width: 400px; 
+            box-shadow: 0 20px 50px rgba(0,0,0,0.2); 
+            max-height: 80vh;  /* 添加最大高度限制 */
+            overflow-y: auto;  /* 添加滚动条支持 */
         }
+
         body.dark-mode .modal-content { background-color: #262626; color: white; }
         .close-modal { position: absolute; top: 20px; right: 20px; cursor: pointer; color: #999; font-size: 24px; }
         .form-group label { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block; }
@@ -160,6 +172,75 @@
         }
         body.dark-mode .form-group input { background: #333; border-color: #404040; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* 从本地版本添加的样式 */
+        .action-btn {
+            padding: 5px 10px;
+            margin-right: 5px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            color: white;
+            font-size: 12px;
+        }
+        
+        .pause-btn { background-color: #ff9800; }
+        .resume-btn { background-color: #4CAF50; }
+        .edit-btn { background-color: #2196F3; }
+        .delete-btn { background-color: #f44336; }
+
+        /* 进度条样式 */
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.3s ease-in-out;
+            min-width: 0%;
+        }
+        
+        .progress-low { background: linear-gradient(90deg, #4CAF50, #66BB6A); }
+        .progress-medium { background: linear-gradient(90deg, #FF9800, #FFB74D); }
+        .progress-high { background: linear-gradient(90deg, #F44336, #EF5350); }
+
+        .cpu-cell, .memory-cell, .disk-cell {
+            position: relative;
+        }
+
+        .cpu-cell span, .memory-cell span, .disk-cell span {
+            display: block;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            margin-top: 2px;
+        }
+
+        body.dark-mode .progress-bar {
+            background-color: #3d3d3d;
+        }
+
+        /* 按钮组样式 */
+        .button-group {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        /* 更大的模态框 */
+        .modal-content.large {
+            width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -201,7 +282,10 @@
         <div class="card">
             <div style="display:flex; justify-content:space-between; margin-bottom:20px;">
                 <h3>主机监控配置</h3>
-                <button class="btn btn-outline" onclick="fetchMonitorData()">🔄 刷新列表</button>
+                <div>
+                    <button class="btn btn-outline" onclick="fetchMonitorData()">🔄 刷新列表</button>
+                    <button class="btn btn-outline" onclick="openGlobalConfigModal()">⚙️ 采集配置</button>
+                </div>
             </div>
             <div style="overflow-x: auto;">
                 <table>
@@ -221,12 +305,20 @@
             </div>
         </div>
 
+        <!-- 网络流量图表 -->
+        <div class="card">
+            <h3>网络流量趋势 (最近10次)</h3>
+            <canvas id="networkChart" height="200"></canvas>
+        </div>
+
         <!-- 系统日志 -->
         <div class="card">
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
                 <h3>运行日志</h3>
                 <div>
                     <button class="btn btn-outline" onclick="fetchMonitorData()">刷新</button>
+                    <button class="btn btn-outline" id="export-data">📊 导出数据</button>
+                    <button class="btn btn-outline" id="export-report">📋 生成报告</button>
                     <button class="btn btn-danger" onclick="clearLogs()">清空</button>
                 </div>
             </div>
@@ -252,33 +344,169 @@
         </div>
     </div>
 
+    <!-- 导出数据模态框 -->
+    <div id="export-modal" class="modal">
+        <div class="modal-content large">
+            <span class="close-modal" onclick="closeExportModal()">&times;</span>
+            <h2>📊 导出数据设置</h2>
+            
+            <div class="form-group">
+                <label>导出格式</label>
+                <select id="export-type" style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb;">
+                    <option value="csv">CSV格式</option>
+                    <option value="excel">Excel格式</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>时间跨度</label>
+                <select id="time-range" style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb;">
+                    <option value="today">今天</option>
+                    <option value="yesterday">昨天</option>
+                    <option value="week">最近7天</option>
+                    <option value="month">最近30天</option>
+                    <option value="custom">自定义时间</option>
+                </select>
+            </div>
+            
+            <div id="custom-time-range" style="display: none;">
+                <div class="form-group">
+                    <label>开始日期</label>
+                    <input type="date" id="export-start-date">
+                </div>
+                <div class="form-group">
+                    <label>结束日期</label>
+                    <input type="date" id="export-end-date">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>主机IP (可选)</label>
+                <select id="export-ip-filter" style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb;">
+                    <option value="">所有主机</option>
+                </select>
+            </div>
+            
+            
+            <div style="margin-top: 20px; text-align: right;">
+                <button class="btn btn-outline" onclick="closeExportModal()">取消</button>
+                <button class="btn btn-primary" onclick="exportData()">开始导出</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 报告生成模态框 -->
+    <div id="report-modal" class="modal">
+        <div class="modal-content large">
+            <span class="close-modal" onclick="closeReportModal()">&times;</span>
+            <h2>📋 生成监控报告</h2>
+            
+            <div class="form-group">
+                <label>报告格式</label>
+                <div style="color: var(--primary); font-weight: bold;">HTML监控报告</div>
+            </div>
+            
+            <div class="form-group">
+                <label>时间跨度</label>
+                <select id="report-time-range" style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb;">
+                    <option value="today">今天</option>
+                    <option value="yesterday">昨天</option>
+                    <option value="week" selected>最近7天</option>
+                    <option value="month">最近30天</option>
+                    <option value="custom">自定义时间</option>
+                </select>
+            </div>
+            
+            <div id="report-custom-time-range" style="display: none;">
+                <div class="form-group">
+                    <label>开始日期</label>
+                    <input type="date" id="report-start-date">
+                </div>
+                <div class="form-group">
+                    <label>结束日期</label>
+                    <input type="date" id="report-end-date">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>选择主机 (可选)</label>
+                <select id="report-host-filter" style="width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb;">
+                    <option value="">所有主机</option>
+                </select>
+            </div>
+            
+            
+            <div class="form-group">
+                <label>报告标题</label>
+                <input type="text" id="report-title" placeholder="监控报告标题" value="服务器监控报告">
+            </div>
+            
+            <div id="report-progress" style="display: none; margin: 15px 0;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="flex: 1; height: 20px; background-color: #f0f0f0; border-radius: 10px; overflow: hidden;">
+                        <div id="report-progress-bar" style="height: 100%; background-color: #4CAF50; width: 0%; transition: width 0.3s;"></div>
+                    </div>
+                    <span id="report-progress-text">0%</span>
+                </div>
+                <div id="report-status" style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">准备生成报告...</div>
+            </div>
+            
+            <div style="margin-top: 20px; text-align: right;">
+                <button class="btn btn-outline" onclick="closeReportModal()">取消</button>
+                <button class="btn btn-primary" onclick="generateReport()">生成报告</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局配置模态框 -->
+    <div id="global-config-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeGlobalConfigModal()">&times;</span>
+            <h2>编辑采集配置</h2>
+            <form id="global-config-form">
+                <div class="form-group">
+                    <label for="modal-global-interval">采集间隔（秒）</label>
+                    <input type="number" id="modal-global-interval" min="10" value="30">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">建议设置不少于60秒，避免频繁采集</div>
+                </div>
+                <div class="form-group">
+                    <label for="modal-global-cleanup-days">数据保留天数</label>
+                    <input type="number" id="modal-global-cleanup-days" min="1" value="30">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">系统会自动清理超过此天数的监控数据</div>
+                </div>
+                <div class="form-group">
+                    <label>默认监控项</label>
+                    <div style="margin-top: 10px;">
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="modal-global-cpu" checked> CPU使用率
+                        </label>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="modal-global-memory" checked> 内存使用率
+                        </label>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="modal-global-disk" checked> 磁盘使用率
+                        </label>
+                        <label style="display: block; margin-bottom: 10px;">
+                            <input type="checkbox" id="modal-global-network" checked> 网络流量
+                        </label>
+                    </div>
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button type="button" class="btn btn-outline" onclick="closeGlobalConfigModal()">取消</button>
+                    <button type="submit" class="btn btn-primary">保存配置</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
-        // 壁纸逻辑
-        const settingsModal = document.getElementById('settingsModal');
-        function openSettingsModal() { 
-            document.getElementById('bg-url-input').value = localStorage.getItem('customWallpaper') || '';
-            settingsModal.style.display = 'block'; 
-        }
-        function closeSettingsModal() { settingsModal.style.display = 'none'; }
-        function saveWallpaper() {
-            const url = document.getElementById('bg-url-input').value.trim();
-            if (url) {
-                localStorage.setItem('customWallpaper', url);
-                document.body.style.backgroundImage = `url('${url}')`;
-                closeSettingsModal();
-            }
-        }
-        function resetWallpaper() {
-            localStorage.removeItem('customWallpaper');
-            document.body.style.backgroundImage = '';
-            closeSettingsModal();
-        }
-        window.onclick = function(e) { if (e.target == settingsModal) closeSettingsModal(); }
+        // ========== 全局变量 ==========
+        let hostMonitorData = {};
+        let reportGenerationInProgress = false;
+        let exportInProgress = false;
+        let networkChart = null;
 
-        const savedBg = localStorage.getItem('customWallpaper');
-        if (savedBg) document.body.style.backgroundImage = `url('${savedBg}')`;
-
-        // 主题逻辑
+        // ========== 主题和UI功能 ==========
         const themeBtn = document.getElementById('themeToggle');
         let currentMode = localStorage.getItem('themeMode') || 'auto';
         
@@ -289,9 +517,15 @@
                 isDark = (h < 6 || h >= 18);
             } else if (currentMode === 'dark') isDark = true;
             
-            if (isDark) { document.body.classList.add('dark-mode'); themeBtn.textContent = '🌙'; }
-            else { document.body.classList.remove('dark-mode'); themeBtn.textContent = '☀️'; }
+            if (isDark) { 
+                document.body.classList.add('dark-mode'); 
+                themeBtn.textContent = '🌙'; 
+            } else { 
+                document.body.classList.remove('dark-mode'); 
+                themeBtn.textContent = '☀️'; 
+            }
         }
+        
         function cycleTheme() {
             const modes = ['auto', 'light', 'dark'];
             const idx = modes.indexOf(currentMode);
@@ -300,7 +534,30 @@
             applyTheme();
         }
 
-        // ============ 业务逻辑 ============
+        // ========== 壁纸功能 ==========
+        function openSettingsModal() { 
+            document.getElementById('bg-url-input').value = localStorage.getItem('customWallpaper') || '';
+            document.getElementById('settingsModal').style.display = 'block'; 
+        }
+        
+        function closeSettingsModal() { document.getElementById('settingsModal').style.display = 'none'; }
+        
+        function saveWallpaper() {
+            const url = document.getElementById('bg-url-input').value.trim();
+            if (url) {
+                localStorage.setItem('customWallpaper', url);
+                document.body.style.backgroundImage = `url('${url}')`;
+                closeSettingsModal();
+            }
+        }
+        
+        function resetWallpaper() {
+            localStorage.removeItem('customWallpaper');
+            document.body.style.backgroundImage = '';
+            closeSettingsModal();
+        }
+
+        // ========== 数据获取和渲染 ==========
         function fetchMonitorData() {
             fetch('/api/monitor_management_data')
                 .then(r => r.json())
@@ -308,6 +565,17 @@
                     updateStatus(data.collection_status);
                     renderHosts(data.hosts);
                     renderLogs(data.recent_logs);
+                    if (networkChart) {
+                        loadNetworkTrends();
+                    }
+                })
+                .catch(error => {
+                    console.error('获取监控数据失败:', error);
+                    updateLogsView({
+                        logs: ['获取监控数据失败: ' + error.message],
+                        count: 1,
+                        type: 'error'
+                    });
                 });
         }
 
@@ -332,12 +600,27 @@
             const tbody = document.getElementById('host-monitor-list-body');
             tbody.innerHTML = '';
             
+            if (!hosts || Object.keys(hosts).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-secondary);">暂无主机数据</td></tr>';
+                return;
+            }
+            
+            hostMonitorData = hosts;
+            
             for (const key in hosts) {
                 const host = hosts[key];
                 const tr = document.createElement('tr');
                 
                 // 进度条颜色辅助函数
                 const getCol = (v) => v<70 ? '#10b981' : (v<90 ? '#f59e0b' : '#ef4444');
+                const getProgressClass = (v) => v<70 ? 'progress-low' : (v<90 ? 'progress-medium' : 'progress-high');
+                
+                // 获取监控项文本
+                const monitorItems = [];
+                if (host.monitor_cpu) monitorItems.push('CPU');
+                if (host.monitor_memory) monitorItems.push('内存');
+                if (host.monitor_disk) monitorItems.push('磁盘');
+                if (host.monitor_network) monitorItems.push('网络');
                 
                 tr.innerHTML = `
                     <td>
@@ -346,22 +629,31 @@
                     </td>
                     <td><span style="color:${host.is_online?'var(--success)':'var(--danger)'}">● ${host.is_online?'在线':'离线'}</span></td>
                     <td>
-                        <span style="font-size:12px;background:rgba(0,0,0,0.05);padding:2px 6px;border-radius:4px;">CPU/MEM/DISK</span>
+                        <span style="font-size:12px;background:rgba(0,0,0,0.05);padding:2px 6px;border-radius:4px;">${monitorItems.join('/')}</span>
+                    </td>
+                    <td class="cpu-cell">
+                        <div class="progress-bar">
+                            <div class="progress-fill ${getProgressClass(host.cpu_usage)}" style="width:${host.cpu_usage}%"></div>
+                        </div>
+                        <span>${host.cpu_usage.toFixed(1)}%</span>
+                    </td>
+                    <td class="memory-cell">
+                        <div class="progress-bar">
+                            <div class="progress-fill ${getProgressClass(host.memory_usage)}" style="width:${host.memory_usage}%"></div>
+                        </div>
+                        <span>${host.memory_usage.toFixed(1)}%</span>
+                    </td>
+                    <td class="disk-cell">
+                        <div class="progress-bar">
+                            <div class="progress-fill ${getProgressClass(host.disk_usage)}" style="width:${host.disk_usage}%"></div>
+                        </div>
+                        <span>${host.disk_usage.toFixed(1)}%</span>
                     </td>
                     <td>
-                        <div class="progress-track"><div class="progress-fill" style="width:${host.cpu_usage}%;background:${getCol(host.cpu_usage)}"></div></div>
-                        <div style="font-size:11px;margin-top:2px">${host.cpu_usage.toFixed(1)}%</div>
-                    </td>
-                    <td>
-                        <div class="progress-track"><div class="progress-fill" style="width:${host.memory_usage}%;background:${getCol(host.memory_usage)}"></div></div>
-                        <div style="font-size:11px;margin-top:2px">${host.memory_usage.toFixed(1)}%</div>
-                    </td>
-                    <td>
-                        <div class="progress-track"><div class="progress-fill" style="width:${host.disk_usage}%;background:${getCol(host.disk_usage)}"></div></div>
-                        <div style="font-size:11px;margin-top:2px">${host.disk_usage.toFixed(1)}%</div>
-                    </td>
-                    <td>
-                        <button class="btn btn-outline" style="padding:4px 10px;font-size:12px">配置</button>
+                        <button class="action-btn edit-btn" onclick="editHostMonitor('${key}')">配置</button>
+                        <button class="action-btn ${host.status === 'paused' ? 'resume-btn' : 'pause-btn'}" onclick="toggleMonitorStatus('${key}')">
+                            ${host.status === 'paused' ? '启用' : '暂停'}
+                        </button>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -370,10 +662,11 @@
 
         function renderLogs(logData) {
             const container = document.getElementById('log-container');
-            if (!logData.logs || logData.logs.length === 0) {
+            if (!logData || !logData.logs || logData.logs.length === 0) {
                 container.innerHTML = '<div style="text-align:center;color:#666;margin-top:50px">暂无日志</div>';
                 return;
             }
+            
             container.innerHTML = logData.logs.map(line => `
                 <div class="log-entry">
                     ${line.replace(/\n/g, '<br>')}
@@ -382,20 +675,36 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        // 立即采集按钮
-        document.getElementById('run-now').onclick = function() {
-            this.textContent = '🚀 正在执行...';
-            this.disabled = true;
-            fetch('/trigger_collection', { method: 'POST' })
-                .then(r => r.json())
-                .then(res => {
-                    setTimeout(() => {
-                        this.textContent = '⚡ 立即采集';
-                        this.disabled = false;
-                        fetchMonitorData();
-                    }, 2000);
-                });
-        };
+        function updateLogsView(logsData) {
+            renderLogs(logsData);
+        }
+
+        // ========== 操作功能 ==========
+        function toggleMonitorStatus(hostKey) {
+            if (!hostMonitorData[hostKey]) return;
+            
+            const currentStatus = hostMonitorData[hostKey].status || 'active';
+            const newStatus = currentStatus === 'active' ? 'paused' : 'active';
+            
+            // 这里可以添加API调用
+            fetch('/api/toggle_monitor_status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ host_key: hostKey, status: newStatus })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    hostMonitorData[hostKey].status = newStatus;
+                    renderHosts(hostMonitorData);
+                }
+            });
+        }
+
+        function editHostMonitor(hostKey) {
+            // 实现编辑主机监控配置
+            alert('编辑功能: ' + hostKey);
+        }
 
         function clearLogs() {
             if(confirm('确定清空日志？')) {
@@ -403,13 +712,732 @@
             }
         }
 
-        // 初始化
-        window.onload = function() {
+        // ========== 网络流量图表 ==========
+        function initializeNetworkChart() {
+            const ctx = document.getElementById('networkChart').getContext('2d');
+            
+            if (networkChart) {
+                networkChart.destroy();
+            }
+            
+            networkChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '接收流量 (MB)',
+                            data: [],
+                            borderColor: 'rgb(75, 192, 192)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: '发送流量 (MB)',
+                            data: [],
+                            borderColor: 'rgb(255, 99, 132)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: { display: true, text: '时间' }
+                        },
+                        y: {
+                            display: true,
+                            title: { display: true, text: '流量 (MB)' },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+            
+            loadNetworkTrends();
+        }
+
+        function loadNetworkTrends() {
+            fetch('/api/network_trends?limit=10')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && networkChart) {
+                        updateNetworkChart(data);
+                    }
+                })
+                .catch(error => {
+                    console.error('获取网络流量数据失败:', error);
+                });
+        }
+
+        function updateNetworkChart(trendData) {
+            if (!networkChart || !trendData.success) return;
+            
+            if (trendData.data && trendData.data.labels && trendData.data.datasets) {
+                networkChart.data.labels = trendData.data.labels;
+                
+                if (trendData.data.datasets[0] && trendData.data.datasets[0].data) {
+                    networkChart.data.datasets[0].data = trendData.data.datasets[0].data;
+                }
+                
+                if (trendData.data.datasets[1] && trendData.data.datasets[1].data) {
+                    networkChart.data.datasets[1].data = trendData.data.datasets[1].data;
+                }
+                
+                networkChart.update();
+            }
+        }
+
+        // ========== 导出功能 ==========
+        function openExportModal() {
+            setDefaultDates();
+            fetchHostsForExport();
+            document.getElementById('export-modal').style.display = 'block';
+        }
+
+        function closeExportModal() {
+            document.getElementById('export-modal').style.display = 'none';
+        }
+
+        function setDefaultDates() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+            
+            document.getElementById('export-start-date').value = startDate.toISOString().split('T')[0];
+            document.getElementById('export-end-date').value = endDate.toISOString().split('T')[0];
+        }
+
+        function fetchHostsForExport() {
+            const select = document.getElementById('export-ip-filter');
+            select.innerHTML = '<option value="">所有主机</option>';
+            
+            Object.values(hostMonitorData).forEach(host => {
+                if (host.ip) {
+                    const option = document.createElement('option');
+                    option.value = host.ip;
+                    option.textContent = `${host.ip} (${host.user || '未知用户'})`;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+        function updateTimeRangeDisplay() {
+            const timeRangeSelect = document.getElementById('time-range');
+            const customTimeRange = document.getElementById('custom-time-range');
+            const startDateInput = document.getElementById('export-start-date');
+            const endDateInput = document.getElementById('export-end-date');
+            
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            const monthAgo = new Date(today);
+            monthAgo.setDate(monthAgo.getDate() - 30);
+            
+            switch(timeRangeSelect.value) {
+                case 'today':
+                    startDateInput.value = today.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'yesterday':
+                    startDateInput.value = yesterday.toISOString().split('T')[0];
+                    endDateInput.value = yesterday.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'week':
+                    startDateInput.value = weekAgo.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'month':
+                    startDateInput.value = monthAgo.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'custom':
+                    customTimeRange.style.display = 'block';
+                    break;
+            }
+        }
+
+        function exportData() {
+            if (exportInProgress) return;
+            
+            const exportType = document.getElementById('export-type').value;
+            const timeRange = document.getElementById('time-range').value;
+            let startDate = '', endDate = '';
+            
+            // 根据时间范围设置日期（您的代码这部分是正确的）
+            if (timeRange === 'custom') {
+                startDate = document.getElementById('export-start-date').value;
+                endDate = document.getElementById('export-end-date').value;
+                if (!startDate || !endDate) {
+                    alert('请选择开始日期和结束日期');
+                    return;
+                }
+            } else {
+                // 预设时间范围逻辑（保持不变）
+                const now = new Date();
+                switch (timeRange) {
+                    case 'today':
+                        startDate = now.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'yesterday':
+                        const yesterday = new Date(now);
+                        yesterday.setDate(yesterday.getDate() - 1);
+                        startDate = yesterday.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'week':
+                        const weekAgo = new Date(now);
+                        weekAgo.setDate(weekAgo.getDate() - 7);
+                        startDate = weekAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                    case 'month':
+                        const monthAgo = new Date(now);
+                        monthAgo.setDate(monthAgo.getDate() - 30);
+                        startDate = monthAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                }
+            }
+            
+            const ipFilter = document.getElementById('export-ip-filter').value;
+            
+            exportInProgress = true;
+            const confirmBtn = document.querySelector('#export-modal .btn-primary');
+            const originalText = confirmBtn.innerHTML;
+            confirmBtn.innerHTML = '导出中...';
+            confirmBtn.disabled = true;
+            
+            // 修复：使用正确的后端API端点
+            const apiUrl = exportType === 'excel' ? '/api/export/excel' : '/api/export/csv';
+            
+            // 构建查询参数
+            const params = new URLSearchParams({
+                start_date: startDate,
+                end_date: endDate
+            });
+            
+            if (ipFilter) {
+                params.append('ip', ipFilter);
+            }
+            
+            // 添加调试信息
+            console.log(`导出请求: ${apiUrl}?${params.toString()}`);
+            
+            let fetchResponse;
+
+            // 正确的API调用（GET请求）
+            fetch(`${apiUrl}?${params.toString()}`)
+                .then(response => {
+                    fetchResponse = response;
+                    console.log(`响应状态: ${response.status}, 响应类型: ${response.headers.get('content-type')}`);
+                    
+                    // 检查响应状态码
+                    if (!response.ok) {
+                        // 如果是4xx或5xx错误，尝试读取错误信息
+                        if (response.status >= 400) {
+                            return response.text().then(errorText => {
+                                console.error('错误响应内容:', errorText);
+                                // 尝试解析JSON错误
+                                try {
+                                    const errorData = JSON.parse(errorText);
+                                    throw new Error(errorData.message || `导出失败: ${response.status}`);
+                                } catch (e) {
+                                    // 如果不是JSON，使用原始错误文本
+                                    throw new Error(`导出失败: ${response.status} - ${errorText.substring(0, 100)}`);
+                                }
+                            });
+                        }
+                        throw new Error(`HTTP错误! 状态码: ${response.status}`);
+                    }
+                    
+                    // 检查响应类型
+                    const contentType = response.headers.get('content-type') || '';
+
+                    // 如果是JSON响应，说明是错误
+                    if (contentType.includes('application/json')) {
+                        return response.json().then(data => {
+                            if (data.success === false) {
+                                throw new Error(data.message || '导出失败');
+                            }
+                            throw new Error('意外的JSON响应格式');
+                        });
+                    }
+
+                    // 如果是Excel文件，正常处理
+                    if (contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') || 
+                        contentType.includes('application/octet-stream')) {
+                        return response.blob();
+                    }
+
+                    // 如果是CSV文件，正常处理
+                    if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
+                        return response.blob();
+                    }
+
+                    // 未知的响应类型
+                    throw new Error(`未知的响应类型: ${contentType}`);
+
+                })
+                .then(blob => {
+                    if (!blob) return;
+                    
+                    console.log(`下载文件大小: ${blob.size} bytes`);
+                    
+                    // 创建下载链接
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    
+                    // 从响应头获取文件名
+                    const contentDisposition = fetchResponse.headers.get('Content-Disposition');
+                    let filename = `监控数据_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
+
+                    if (contentDisposition) {
+                        const filenameMatch = contentDisposition.match(/filename\\*=UTF-8''(.+)/);
+                        if (filenameMatch) {
+                            filename = decodeURIComponent(filenameMatch[1]);
+                        } else {
+                            const simpleMatch = contentDisposition.match(/filename=\"(.+)\"/);
+                            if (simpleMatch) {
+                                filename = simpleMatch[1];
+                            }
+                        }
+                    } else {
+                        // 默认文件名
+                        if (exportType === 'excel') {
+                            filename += '.xlsx';
+                        } else {
+                            filename += '.csv';
+                        }
+                    }
+
+                    
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    
+                    // 恢复按钮状态
+                    exportInProgress = false;
+                    confirmBtn.innerHTML = originalText;
+                    confirmBtn.disabled = false;
+                    closeExportModal();
+                    
+                    // 显示成功消息
+                    showNotification('导出成功！文件已开始下载', 'success');
+                })
+                .catch(error => {
+                    console.error('导出失败详情:', error);
+                    exportInProgress = false;
+                    confirmBtn.innerHTML = originalText;
+                    confirmBtn.disabled = false;
+                    
+                    // 显示错误消息
+                    showNotification(`导出失败: ${error.message}`, 'error');
+                });
+        }
+
+        // ========== 通知功能 ==========
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 8px;
+                color: white;
+                font-weight: 500;
+                z-index: 1000;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                transition: all 0.3s ease;
+                max-width: 300px;
+            `;
+            
+            if (type === 'success') {
+                notification.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+            } else if (type === 'error') {
+                notification.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+            } else {
+                notification.style.background = 'linear-gradient(135deg, #6366f1, #4f46e5)';
+            }
+            
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.transform = 'translateX(100%)';
+                notification.style.opacity = '0';
+                setTimeout(() => {
+                    document.body.removeChild(notification);
+                }, 300);
+            }, 3000);
+        }
+
+
+
+        // ========== 报告生成功能 ==========
+        function openReportModal() {
+            setReportDefaultDates();
+            loadHostsForReport();
+            document.getElementById('report-modal').style.display = 'block';
+        }
+
+        function closeReportModal() {
+            document.getElementById('report-modal').style.display = 'none';
+            resetReportGeneration();
+        }
+
+        function setReportDefaultDates() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+            
+            document.getElementById('report-start-date').value = startDate.toISOString().split('T')[0];
+            document.getElementById('report-end-date').value = endDate.toISOString().split('T')[0];
+        }
+
+        function loadHostsForReport() {
+            const select = document.getElementById('report-host-filter');
+            select.innerHTML = '<option value="">所有主机</option>';
+            
+            Object.values(hostMonitorData).forEach(host => {
+                if (host.ip) {
+                    const option = document.createElement('option');
+                    option.value = host.ip;
+                    option.textContent = `${host.ip} (${host.user || '未知用户'})`;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+
+        function generateReport() {
+            if (reportGenerationInProgress) return;
+            
+            // 收集报告参数
+            const reportData = collectReportData();
+            if (!reportData) return;
+            
+            reportGenerationInProgress = true;
+            const generateBtn = document.querySelector('#report-modal .btn-primary');
+            const originalText = generateBtn.innerHTML;
+            generateBtn.innerHTML = '生成中...';
+            generateBtn.disabled = true;
+            
+            document.getElementById('report-progress').style.display = 'block';
+            updateReportProgress(10, '正在准备报告数据...');
+            
+            console.log('开始生成报告，参数:', reportData);
+            
+            // 调用后端API生成报告
+            generateReportWithAPI(reportData)
+                .then(response => {
+                    console.log('报告生成响应:', response);
+                    
+                    if (response.success) {
+                        updateReportProgress(100, '报告生成成功！');
+                        setTimeout(() => {
+                            handleReportDownload(response);
+                            reportGenerationInProgress = false;
+                            generateBtn.innerHTML = originalText;
+                            generateBtn.disabled = false;
+                            closeReportModal();
+                            showNotification('报告生成成功！', 'success');
+                        }, 1000);
+                    } else {
+                        throw new Error(response.message || '报告生成失败');
+                    }
+                })
+                .catch(error => {
+                    console.error('报告生成失败详情:', error);
+                    reportGenerationInProgress = false;
+                    generateBtn.innerHTML = originalText;
+                    generateBtn.disabled = false;
+                    
+                    // 提供更详细的错误信息
+                    let errorMessage = error.message;
+                    if (error.message.includes('Unexpected token')) {
+                        errorMessage = '后端返回了HTML内容而不是JSON，请检查API实现';
+                    }
+                    
+                    showNotification(`报告生成失败: ${errorMessage}`, 'error');
+                });
+        }
+
+        function collectReportData() {
+            const selectedHost = document.getElementById('report-host-filter').value;
+            const host_ips = selectedHost ? [selectedHost] : [];
+            let startDate = '', endDate = '';
+            
+
+            const timeRange = document.getElementById('report-time-range').value;
+            if (timeRange === 'custom') {
+                startDate = document.getElementById('report-start-date').value;
+                endDate = document.getElementById('report-end-date').value;
+                if (!startDate || !endDate) {
+                    showNotification('请选择开始日期和结束日期', 'error');
+                    return null;
+                }
+            } else {
+                const now = new Date();
+                switch (timeRange) {
+                    case 'today':
+                        startDate = now.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'yesterday':
+                        const yesterday = new Date(now);
+                        yesterday.setDate(yesterday.getDate() - 1);
+                        startDate = yesterday.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'week':
+                        const weekAgo = new Date(now);
+                        weekAgo.setDate(weekAgo.getDate() - 7);
+                        startDate = weekAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                    case 'month':
+                        const monthAgo = new Date(now);
+                        monthAgo.setDate(monthAgo.getDate() - 30);
+                        startDate = monthAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                }
+            }
+            
+            // 只获取第一个选中的主机（后端限制）
+            const selectedHosts = Array.from(document.querySelectorAll('#host-selection-list input[type="checkbox"]:checked'))
+                .map(checkbox => checkbox.value)
+                .filter(ip => ip !== '');
+            
+            // 获取报告标题
+            const reportTitle = document.getElementById('report-title').value || '服务器监控报告';
+            
+            return {
+                start_date: startDate,
+                end_date: endDate,
+                host_ips: selectedHosts,
+                title: reportTitle
+            };
+        }
+
+        function generateReportWithAPI(reportData) {
+            return new Promise((resolve, reject) => {
+                // 构建查询参数
+                const params = new URLSearchParams({
+                    start_date: reportData.start_date,
+                    end_date: reportData.end_date,
+                    title: reportData.title,
+                    type: 'html',
+                    template: 'summary'
+                });
+                
+                // 只发送第一个选中的主机IP（后端只支持单个主机）
+                if (reportData.host_ips.length > 0) {
+                    params.append('host_ip', reportData.host_ips[0]);
+                }
+                
+                fetch(`/api/export/report?${params.toString()}`)
+                    .then(response => {
+                        console.log('报告API响应状态:', response.status);
+                        console.log('响应类型:', response.headers.get('content-type'));
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP错误! 状态码: ${response.status}`);
+                        }
+                        
+                        // 检查响应类型
+                        const contentType = response.headers.get('content-type') || '';
+                        
+                        if (contentType.includes('application/json')) {
+                            // 如果是JSON响应，说明是错误信息
+                            return response.json().then(data => {
+                                if (data.success === false) {
+                                    throw new Error(data.message || '报告生成失败');
+                                }
+                                resolve(data);
+                            });
+                        } else if (contentType.includes('text/html')) {
+                            // 如果是HTML响应，说明是报告内容
+                            return response.text().then(htmlContent => {
+                                resolve({
+                                    success: true,
+                                    report_content: htmlContent,
+                                    message: '报告生成成功'
+                                });
+                            });
+                        } else {
+                            // 未知的响应类型
+                            throw new Error(`未知的响应类型: ${contentType}`);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('报告API调用失败:', error);
+                        reject(error);
+                    });
+            });
+        }
+
+
+        function handleReportDownload(response) {
+            if (response.report_content) {
+                // 创建HTML报告下载
+                const blob = new Blob([response.report_content], { type: 'text/html; charset=utf-8' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `监控报告_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.html`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                // 可选：在新标签页打开预览
+                setTimeout(() => {
+                    const previewWindow = window.open('', '_blank');
+                    previewWindow.document.write(response.report_content);
+                    previewWindow.document.close();
+                }, 500);
+            } else if (response.report_url) {
+                // 如果后端返回报告URL，直接打开
+                window.open(response.report_url, '_blank');
+            } else {
+                console.error('报告响应格式错误:', response);
+                showNotification('报告格式错误，请联系管理员', 'error');
+            }
+        }
+
+
+
+        function simulateReportProgress() {
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                if (progress < 90) {
+                    progress += 10;
+                    updateReportProgress(progress, `正在生成报告... ${progress}%`);
+                } else {
+                    clearInterval(progressInterval);
+                }
+            }, 300);
+        }
+
+        function updateReportProgress(percent, status) {
+            document.getElementById('report-progress-bar').style.width = percent + '%';
+            document.getElementById('report-progress-text').textContent = percent + '%';
+            document.getElementById('report-status').textContent = status;
+        }
+
+        function resetReportGeneration() {
+            reportGenerationInProgress = false;
+            document.getElementById('report-progress').style.display = 'none';
+        }
+
+        // ========== 全局配置功能 ==========
+        function openGlobalConfigModal() {
+            document.getElementById('global-config-modal').style.display = 'block';
+        }
+
+        function closeGlobalConfigModal() {
+            document.getElementById('global-config-modal').style.display = 'none';
+        }
+
+        // ========== 事件监听器 ==========
+        document.addEventListener('DOMContentLoaded', function() {
+           
+            
+            // 立即采集按钮
+            document.getElementById('run-now').addEventListener('click', function() {
+                this.textContent = '🚀 正在执行...';
+                this.disabled = true;
+                fetch('/trigger_collection', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(res => {
+                        setTimeout(() => {
+                            this.textContent = '⚡ 立即采集';
+                            this.disabled = false;
+                            fetchMonitorData();
+                        }, 2000);
+                    });
+            });
+
+            // 导出数据按钮
+            document.getElementById('export-data').addEventListener('click', openExportModal);
+
+            // 生成报告按钮
+            document.getElementById('export-report').addEventListener('click', openReportModal);
+
+            // 时间范围选择事件
+            document.getElementById('time-range').addEventListener('change', function() {
+                document.getElementById('custom-time-range').style.display = 
+                    this.value === 'custom' ? 'block' : 'none';
+                // 新增：更新时间范围显示
+                updateTimeRangeDisplay();
+            });
+
+            document.getElementById('report-time-range').addEventListener('change', function() {
+                document.getElementById('report-custom-time-range').style.display = 
+                    this.value === 'custom' ? 'block' : 'none';
+                // 新增：更新时间范围显示
+                updateTimeRangeDisplay();
+            });
+
+            
+
+            // 全局配置表单
+            document.getElementById('global-config-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                alert('配置保存功能开发中...');
+                closeGlobalConfigModal();
+            });
+
+            // 新增：日期输入变化监听
+            document.getElementById('export-start-date').addEventListener('change', updateTimeRangeDisplay);
+            document.getElementById('export-end-date').addEventListener('change', updateTimeRangeDisplay);
+            document.getElementById('report-start-date').addEventListener('change', updateTimeRangeDisplay);
+            document.getElementById('report-end-date').addEventListener('change', updateTimeRangeDisplay);
+
+            // 初始化
             applyTheme();
+            const savedBg = localStorage.getItem('customWallpaper');
+            if (savedBg) document.body.style.backgroundImage = `url('${savedBg}')`;
+            
             fetchMonitorData();
+            initializeNetworkChart();
+            
+            // 定时刷新
             setInterval(fetchMonitorData, 10000);
             setInterval(applyTheme, 60000);
-        };
+        });
+
+        // 点击模态框外部关闭
+        window.addEventListener('click', function(e) {
+            if (e.target.classList.contains('modal')) {
+                e.target.style.display = 'none';
+            }
+        });
     </script>
 </body>
 </html>

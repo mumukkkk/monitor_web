@@ -1,4 +1,4 @@
-from  flask import Flask, render_template, request, jsonify
+from  flask import Flask, render_template, request, jsonify,send_file,make_response
 import base64
 import sqlite3
 import os
@@ -9,10 +9,15 @@ import json
 import re
 from datetime import datetime
 
+from datetime import datetime, timezone
+import pytz 
+
+
 # 导入密码解密模块
 from privacy import decrypt_password
 
 app = Flask(__name__)
+
 
 # 新的公钥参数 (e, n)
 public_exponent = 65537
@@ -1914,12 +1919,25 @@ def api_network_trends():
         # 提取数据
         for row in data:
             ip, rx, tx, check_time = row
-            # 格式化时间显示
-            time_str = check_time[11:16]  # 只显示时:分
+            
+            # 将UTC时间转换为本地时间
+            try:
+                # 解析UTC时间字符串
+                utc_time = datetime.strptime(check_time, '%Y-%m-%d %H:%M:%S')
+                # 添加时区信息并转换为中国时区
+                utc_time = utc_time.replace(tzinfo=timezone.utc)
+                local_time = utc_time.astimezone(pytz.timezone('Asia/Shanghai'))
+                # 格式化显示时间
+                time_str = local_time.strftime('%H:%M')
+            except Exception as e:
+                # 如果转换失败，使用原来的简单截取方法
+                print(f"时间转换失败: {e}, 使用原始时间: {check_time}")
+                time_str = check_time[11:16]  # 回退到原来的处理方式
             
             result['labels'].append(time_str)
             result['datasets'][0]['data'].append(round(rx, 2))
             result['datasets'][1]['data'].append(round(tx, 2))
+
         
         # 获取所有主机IP用于下拉选择
         cursor.execute("SELECT DISTINCT ip FROM monitoring_data WHERE network_rx > 0 OR network_tx > 0")
@@ -2142,16 +2160,7 @@ def api_get_historical_data():
         print(f"查询历史数据未知错误: {e}")
         return jsonify({'success': False, 'message': f'查询失败: {str(e)}'})
 
-if __name__ == '__main__':
-    # 初始化数据库
-    init_db()
-    
-    # 启动监控线程
-    monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
-    monitor_thread.start()
-    
-    app.run(host='0.0.0.0', port=80)
-    # 在现有的API基础上添加以下功能
+
 
 @app.route('/api/network_summary')
 def api_network_summary():
@@ -2217,3 +2226,465 @@ def send_alert_notification(alert_data):
         print(f"发送通知失败: {e}")
         return False
 
+
+
+@app.route('/api/export/excel')
+def api_export_excel():
+    """导出监控数据为Excel格式"""
+    try:
+        # 获取查询参数
+        start_date = request.args.get('start_date', '')
+        end_date = request.args.get('end_date', '')
+        ip_filter = request.args.get('ip', '')
+        
+        # 参数验证 - 修复逻辑
+        if not start_date or not end_date:
+            return jsonify({'success': False, 'message': '请选择开始日期和结束日期'}), 400
+        
+        # 验证日期格式
+        try:
+            from datetime import datetime
+            datetime.strptime(start_date, '%Y-%m-%d')
+            datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'message': '日期格式错误，请使用YYYY-MM-DD格式'}), 400
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 构建查询条件 - 修复WHERE子句逻辑
+        conditions = []
+        params = []
+        
+        conditions.append("DATE(check_time) BETWEEN ? AND ?")
+        params.extend([start_date, end_date])
+        
+        if ip_filter:
+            conditions.append("ip = ?")
+            params.append(ip_filter)
+            
+        where_clause = "WHERE " + " AND ".join(conditions)
+        
+        # 查询数据
+        query = f"""
+            SELECT ip, cpu_usage, memory_usage, disk_usage, 
+                network_rx, network_tx, is_online, check_time
+            FROM monitoring_data 
+            {where_clause}
+            ORDER BY check_time DESC
+            LIMIT 1000
+        """
+        
+        cursor.execute(query, params)
+        data = cursor.fetchall()
+        conn.close()
+
+        if not data:
+            return jsonify({'success': False, 'message': '没有找到符合条件的监控数据'}), 404
+        
+        # 检查openpyxl是否安装
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, Alignment, PatternFill
+            from datetime import datetime
+            from io import BytesIO
+            from urllib.parse import quote
+        except ImportError as e:
+            return jsonify({
+                'success': False, 
+                'message': f'Excel导出功能需要安装openpyxl库: {str(e)}'
+            }), 500
+        
+        # 创建工作簿
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "监控数据"
+        
+        # 设置表头样式
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        header_alignment = Alignment(horizontal='center', vertical='center')
+        
+        # 设置表头
+        headers = ['主机IP', 'CPU使用率(%)', '内存使用率(%)', '磁盘使用率(%)',
+                  '网络接收(MB)', '网络发送(MB)', '在线状态', '记录时间']
+        
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+        
+        # 写入数据
+        for row_idx, row_data in enumerate(data, 2):
+            ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time = row_data
+            
+            # 处理NULL值
+            cpu_usage = cpu_usage if cpu_usage is not None else 0
+            memory_usage = memory_usage if memory_usage is not None else 0
+            disk_usage = disk_usage if disk_usage is not None else 0
+            network_rx = network_rx if network_rx is not None else 0
+            network_tx = network_tx if network_tx is not None else 0
+            status = '在线' if is_online else '离线'
+            
+            ws.cell(row=row_idx, column=1, value=ip)
+            ws.cell(row=row_idx, column=2, value=cpu_usage)
+            ws.cell(row=row_idx, column=3, value=memory_usage)
+            ws.cell(row=row_idx, column=4, value=disk_usage)
+            ws.cell(row=row_idx, column=5, value=network_rx)
+            ws.cell(row=row_idx, column=6, value=network_tx)
+            ws.cell(row=row_idx, column=7, value=status)
+            ws.cell(row=row_idx, column=8, value=check_time)
+        
+        # 调整列宽
+        column_widths = [15, 12, 12, 12, 12, 12, 10, 20]
+        for col, width in enumerate(column_widths, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = width
+        
+        # 保存到内存
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        # 生成文件名 - 修复文件名编码
+        filename = f"监控数据_{start_date}_至_{end_date}.xlsx"
+        if ip_filter:
+            filename = f"监控数据_{ip_filter}_{start_date}_至_{end_date}.xlsx"
+        
+        encoded_filename = quote(filename.encode('utf-8'))
+
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        response.headers['Content-Disposition'] = f'attachment; filename*=UTF-8\'\'{encoded_filename}'
+
+        # 添加调试日志
+        print(f"Excel导出成功：找到 {len(data)} 条记录，文件大小: {len(output.getvalue())} 字节")
+
+        return response
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Excel导出错误: {error_details}")
+        return jsonify({'success': False, 'message': f'导出失败: {str(e)}'}), 500
+
+# 报告生成API
+@app.route('/api/export/report')
+def api_export_report():
+    """统一监控报告生成API"""
+    try:
+        from datetime import datetime
+        from io import BytesIO
+        
+        # 获取并验证请求参数
+        report_type = request.args.get('type', 'html').lower()
+        start_date = request.args.get('start_date', '')
+        end_date = request.args.get('end_date', '')
+        host_ip = request.args.get('host_ip', '')
+        template = request.args.get('template', 'summary')
+        title = request.args.get('title', '服务器监控报告')
+        
+        # 参数验证
+        if not start_date or not end_date:
+            return jsonify({
+                'success': False, 
+                'message': '请提供开始日期和结束日期',
+                'required_params': ['start_date', 'end_date']
+            })
+        
+        # 验证日期格式
+        try:
+            datetime.strptime(start_date, '%Y-%m-%d')
+            datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({
+                'success': False, 
+                'message': '日期格式错误，请使用YYYY-MM-DD格式',
+                'example': '2024-01-01'
+            })
+        
+        # 验证报告类型
+        valid_report_types = ['html']
+        if report_type not in valid_report_types:
+            return jsonify({
+                'success': False, 
+                'message': f'不支持的报告格式: {report_type}',
+                'supported_types': valid_report_types
+            })
+        
+        # 验证模板类型
+        valid_templates = ['summary', 'detailed', 'performance', 'trends']
+        if template not in valid_templates:
+            return jsonify({
+                'success': False, 
+                'message': f'不支持的模板类型: {template}',
+                'supported_templates': valid_templates
+            })
+        
+        # 根据报告类型调用相应的生成函数
+        if report_type == 'html':
+            result = generate_html_report_v2(start_date, end_date, host_ip, template, title)
+        else:
+            return jsonify({'success': False, 'message': '未知的报告类型'})
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"报告生成错误: {error_details}")
+        
+        return jsonify({
+            'success': False, 
+            'message': f'报告生成失败: {str(e)}',
+            'error_details': str(e)
+        })
+
+def generate_html_report_v2(start_date, end_date, host_ip='', template='summary', title='服务器监控报告'):
+    """增强版HTML报告生成函数"""
+    try:
+        # 构建查询条件
+        conditions = []
+        params = []
+        
+        conditions.append("DATE(check_time) BETWEEN ? AND ?")
+        params.extend([start_date, end_date])
+        
+        if host_ip:
+            conditions.append("ip = ?")
+            params.append(host_ip)
+        
+        where_clause = "WHERE " + " AND ".join(conditions)
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取基础统计信息
+        cursor.execute(f"""
+            SELECT 
+                COUNT(DISTINCT ip) as host_count,
+                AVG(cpu_usage) as avg_cpu,
+                AVG(memory_usage) as avg_memory,
+                AVG(disk_usage) as avg_disk,
+                AVG(network_rx) as avg_rx,
+                AVG(network_tx) as avg_tx,
+                COUNT(*) as total_records,
+                COUNT(DISTINCT CASE WHEN is_online = 1 THEN ip END) as online_hosts,
+                MAX(cpu_usage) as max_cpu,
+                MAX(memory_usage) as max_memory,
+                MAX(disk_usage) as max_disk
+            FROM monitoring_data 
+            {where_clause}
+        """, params)
+        
+        stats = cursor.fetchone()
+        
+        # 获取详细数据用于图表
+        cursor.execute(f"""
+            SELECT ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, 
+                   is_online, check_time
+            FROM monitoring_data 
+            {where_clause}
+            ORDER BY check_time DESC
+            LIMIT 500
+        """, params)
+        
+        detailed_data = cursor.fetchall()
+        conn.close()
+        
+        # 生成HTML报告
+        return generate_enhanced_html_report(stats, detailed_data, start_date, end_date, host_ip, template, title)
+        
+    except Exception as e:
+        raise Exception(f"HTML报告生成失败: {str(e)}")
+
+def generate_enhanced_html_report(stats, detailed_data, start_date, end_date, host_ip, template, title):
+    """生成增强的HTML报告"""
+    from datetime import datetime
+    from io import BytesIO
+    
+    # 解析统计信息
+    host_count, avg_cpu, avg_memory, avg_disk, avg_rx, avg_tx, total_records, online_hosts, max_cpu, max_memory, max_disk = stats
+    
+    # 生成HTML内容
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>{title}</title>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: 'Microsoft YaHei', Arial, sans-serif; margin: 20px; line-height: 1.6; }}
+            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; }}
+            .section {{ margin: 25px 0; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin: 20px 0; }}
+            .stat-item {{ padding: 20px; background: #f8f9fa; border-radius: 8px; text-align: center; border-left: 4px solid #007bff; }}
+            .stat-value {{ font-size: 28px; font-weight: bold; color: #007bff; margin-bottom: 5px; }}
+            .stat-label {{ font-size: 14px; color: #6c757d; }}
+            .recommendation {{ margin: 12px 0; padding: 15px; background: #d4edda; border-left: 4px solid #28a745; border-radius: 4px; }}
+            .data-table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+            .data-table th, .data-table td {{ padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; }}
+            .data-table th {{ background: #f8f9fa; font-weight: 600; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📊 {title}</h1>
+            <p>📅 统计期间: {start_date} 至 {end_date}</p>
+            <p>🖥️ 监控范围: {f"主机 {host_ip}" if host_ip else "所有主机"} | 总数: {host_count}台</p>
+            <p>⏰ 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </div>
+        
+        <div class="section">
+            <h2>📈 性能概览</h2>
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <div class="stat-value">{avg_cpu:.1f}%</div>
+                    <div class="stat-label">平均CPU使用率</div>
+                    <div style="font-size: 12px; color: #888;">峰值: {max_cpu:.1f}%</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{avg_memory:.1f}%</div>
+                    <div class="stat-label">平均内存使用率</div>
+                    <div style="font-size: 12px; color: #888;">峰值: {max_memory:.1f}%</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{avg_disk:.1f}%</div>
+                    <div class="stat-label">平均磁盘使用率</div>
+                    <div style="font-size: 12px; color: #888;">峰值: {max_disk:.1f}%</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{online_hosts}/{host_count}</div>
+                    <div class="stat-label">在线主机</div>
+                    <div style="font-size: 12px; color: #888;">可用性: {(online_hosts/host_count*100 if host_count>0 else 0):.1f}%</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>📋 详细数据</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>主机IP</th>
+                        <th>CPU%</th>
+                        <th>内存%</th>
+                        <th>磁盘%</th>
+                        <th>网络RX</th>
+                        <th>网络TX</th>
+                        <th>状态</th>
+                        <th>检查时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(
+                        f'<tr><td>{row[0]}</td><td>{row[1]:.1f}</td><td>{row[2]:.1f}</td>'
+                        f'<td>{row[3]:.1f}</td><td>{row[4]:.1f}MB</td><td>{row[5]:.1f}MB</td>'
+                        f'<td>{"✅在线" if row[6] else "❌离线"}</td><td>{row[7]}</td></tr>'
+                        for row in detailed_data[:50]
+                    )}
+                </tbody>
+            </table>
+            <p style="text-align: center; color: #6c757d; margin-top: 10px;">
+                显示前50条记录，共{len(detailed_data)}条记录
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # 返回HTML文件
+    output = BytesIO(html_content.encode('utf-8'))
+    
+    return send_file(
+        output,
+        download_name=f"{title}_{start_date}_to_{end_date}.html",
+        as_attachment=True,
+        mimetype='text/html'
+    )
+
+@app.route('/api/export/csv')
+def api_export_csv():
+    """导出监控数据为CSV格式"""
+    try:
+        # 获取查询参数
+        start_date = request.args.get('start_date', '')
+        end_date = request.args.get('end_date', '')
+        ip_filter = request.args.get('ip', '')
+        
+        # 参数验证
+        if not start_date or not end_date:
+            return jsonify({'success': False, 'message': '请选择开始日期和结束日期'})
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 构建查询条件
+        conditions = []
+        params = []
+        
+        if start_date:
+            conditions.append("DATE(check_time) >= ?")
+            params.append(start_date)
+            
+        if end_date:
+            conditions.append("DATE(check_time) <= ?")
+            params.append(end_date)
+            
+        if ip_filter:
+            conditions.append("ip = ?")
+            params.append(ip_filter)
+            
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        
+        # 查询数据
+        query = f"""
+            SELECT ip, cpu_usage, memory_usage, disk_usage, 
+                network_rx, network_tx, is_online, check_time
+            FROM monitoring_data 
+            {where_clause}
+            ORDER BY check_time DESC
+            LIMIT 1000
+        """
+        
+        cursor.execute(query, params)
+        data = cursor.fetchall()
+        conn.close()
+        
+        if not data:
+            return jsonify({'success': False, 'message': '没有找到符合条件的监控数据'})
+        
+        # 生成CSV内容
+        import io
+        import csv
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # 写入表头
+        writer.writerow(['主机IP', 'CPU使用率%', '内存使用率%', '磁盘使用率%', 
+                        '接收流量(MB)', '发送流量(MB)', '在线状态', '检查时间'])
+        
+        # 写入数据
+        for row in data:
+            writer.writerow(row)
+        
+        # 返回CSV文件
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename=monitor_data_{start_date}_to_{end_date}.csv'
+        
+        return response
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+if __name__ == '__main__':
+    # 初始化数据库
+    init_db()
+    
+    # 启动监控线程
+    monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
+    monitor_thread.start()
+    
+    app.run(host='0.0.0.0', port=80)

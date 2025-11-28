@@ -3,3 +3,7 @@ werkzeug==2.0.3
 ansible==2.9.27
 paramiko==3.4.0
 cryptography==42.0.0
+openpyxl==3.1.2
+pytz==2023.3
+weasyprint==60.0
+python-docx==1.1.0
