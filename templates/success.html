@@ -1,28 +1,97 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <title>提交成功</title>
     <meta charset="utf-8">
-    <script>
-        var countdown = 5; // 倒计时秒数
-        function updateCountdown() {
-            document.getElementById('countdown').textContent = countdown;
-            if (countdown <= 0) {
-                window.location.href = '/'; // 跳转回主页
-            } else {
-                countdown--;
-                setTimeout(updateCountdown, 1000); // 每秒更新一次
-            }
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --text-main: #1f2937;
+            --text-secondary: #6b7280;
+            --bg-glass: rgba(255, 255, 255, 0.85);
+            --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            --wallpaper: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
         }
-        // 页面加载完成后开始倒计时
-        window.onload = function() {
-            updateCountdown();
-        };
-    </script>
+        
+        body.dark-mode {
+            --text-main: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-glass: rgba(30, 30, 30, 0.8);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--wallpaper) center/cover fixed;
+            height: 100vh;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .success-card {
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            padding: 40px;
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+            max-width: 400px;
+            width: 90%;
+            border: 1px solid rgba(255,255,255,0.4);
+        }
+
+        h1 { color: #10b981; margin: 0 0 10px 0; font-size: 24px; }
+        p { color: var(--text-secondary); margin: 10px 0; font-size: 15px; }
+        .countdown { font-weight: bold; color: var(--primary); font-size: 18px; }
+        .btn {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 10px 25px;
+            background: var(--primary);
+            color: white;
+            text-decoration: none;
+            border-radius: 50px;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        
+        .icon { font-size: 60px; color: #10b981; margin-bottom: 20px; }
+    </style>
 </head>
 <body>
-    <h1>主机添加成功！</h1>
-    <p>页面将在 <span id="countdown">5</span> 秒后自动跳转回主页...</p>
-    <p>如果页面没有自动跳转，请 <a href="/">点击这里</a> 返回主页</p>
+    <div class="success-card">
+        <div class="icon">✓</div>
+        <h1>操作成功！</h1>
+        <p>系统已完成您的请求</p>
+        <p>页面将在 <span id="countdown" class="countdown">5</span> 秒后自动跳转...</p>
+        <a href="/" class="btn">立即返回主页</a>
+    </div>
+
+    <script>
+        // 简单的暗黑模式和壁纸加载
+        if (localStorage.getItem('themeMode') === 'dark' || 
+           (localStorage.getItem('themeMode') === 'auto' && (new Date().getHours() >= 18 || new Date().getHours() < 6))) {
+            document.body.classList.add('dark-mode');
+        }
+        const bg = localStorage.getItem('customWallpaper');
+        if(bg) document.body.style.backgroundImage = `url('${bg}')`;
+
+        var countdown = 3; // 改为3秒，体验更好
+        document.getElementById('countdown').textContent = countdown;
+        
+        function updateCountdown() {
+            countdown--;
+            document.getElementById('countdown').textContent = countdown;
+            if (countdown <= 0) {
+                window.location.href = '/'; 
+            } else {
+                setTimeout(updateCountdown, 1000); 
+            }
+        }
+        setTimeout(updateCountdown, 1000);
+    </script>
 </body>
-</html> 
+</html>

@@ -3,87 +3,209 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>告警管理 - 服务器监控系统</title>
+    <title>告警管理 - Server Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        .alert-critical { background-color: #f8d7da; border-color: #f5c6cb; }
-        .alert-high { background-color: #fff3cd; border-color: #ffeaa7; }
-        .alert-medium { background-color: #d1ecf1; border-color: #bee5eb; }
-        .alert-low { background-color: #d4edda; border-color: #c3e6cb; }
-        .severity-badge { font-size: 0.8em; padding: 0.3em 0.6em; }
-        .rule-card { transition: all 0.3s ease; }
-        .rule-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        :root {
+            --primary: #6366f1;
+            --danger: #ef4444;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --text-main: #1f2937;
+            --text-secondary: #6b7280;
+            --bg-glass: rgba(255, 255, 255, 0.85);
+            --bg-card: rgba(255, 255, 255, 0.5);
+            --border-glass: rgba(255, 255, 255, 0.4);
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1);
+            --radius: 20px;
+            --wallpaper: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+
+        body.dark-mode {
+            --text-main: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-glass: rgba(30, 30, 30, 0.8);
+            --bg-card: rgba(45, 45, 45, 0.6);
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 20px;
+            min-height: 100vh;
+            background: var(--wallpaper) center/cover fixed;
+            color: var(--text-main);
+            transition: color 0.3s;
+        }
+
+        /* 顶部导航 */
+        .nav-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 15px 30px;
+            border-radius: 50px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-glass);
+        }
+        .logo { font-size: 20px; font-weight: 800; background: linear-gradient(to right, var(--warning), #f59e0b); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+        .nav-pills { display: flex; gap: 5px; background: rgba(0,0,0,0.05); padding: 4px; border-radius: 30px; }
+        body.dark-mode .nav-pills { background: rgba(255,255,255,0.05); }
+
+        .nav-item {
+            padding: 8px 20px; border-radius: 20px; text-decoration: none; color: var(--text-secondary);
+            font-size: 14px; font-weight: 500; transition: all 0.2s; border: none; background: transparent; cursor: pointer;
+        }
+        .nav-item:hover { color: var(--text-main); }
+        .nav-item.active { background: white; color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        body.dark-mode .nav-item.active { background: #404040; color: white; }
+
+        /* 通用玻璃卡片 */
+        .glass-card {
+            background: var(--bg-glass);
+            backdrop-filter: blur(15px);
+            border-radius: var(--radius);
+            border: 1px solid var(--border-glass);
+            box-shadow: var(--shadow);
+            padding: 25px;
+            margin-bottom: 25px;
+        }
+        .card-header-custom {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid var(--border-glass);
+        }
+        .card-header-custom h5 { margin: 0; font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 10px; }
+
+        /* 活跃告警样式 */
+        .alert-console {
+            background: rgba(0,0,0,0.03);
+            border-radius: 12px;
+            padding: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        body.dark-mode .alert-console { background: rgba(0,0,0,0.2); }
+
+        .alert-item {
+            background: var(--bg-card);
+            border-left: 4px solid #ccc;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+            transition: all 0.2s;
+        }
+        .alert-item:hover { transform: translateX(4px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        
+        .severity-critical { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.05); }
+        .severity-high { border-left-color: #f97316; background: rgba(249, 115, 22, 0.05); }
+        .severity-medium { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.05); }
+        .severity-low { border-left-color: var(--success); background: rgba(16, 185, 129, 0.05); }
+
+        .alert-content strong { font-size: 14px; display: block; margin-bottom: 4px; }
+        .alert-time { font-size: 12px; color: var(--text-secondary); }
+
+        /* 规则卡片 */
+        .rule-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.3s;
+            height: 100%;
+        }
+        .rule-card:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.1); border-color: var(--primary); }
+        .rule-title { font-weight: 700; font-size: 15px; margin-bottom: 10px; color: var(--text-main); }
+        .rule-info { font-size: 13px; color: var(--text-secondary); margin-bottom: 15px; line-height: 1.6; }
+        .rule-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: rgba(0,0,0,0.05); }
+
+        /* 按钮与表单 */
+        .btn-primary { background: var(--primary); border: none; border-radius: 50px; padding: 8px 20px; font-weight: 600; }
+        .btn-primary:hover { background: #4f46e5; }
+        .btn-sm-rounded { border-radius: 20px; font-size: 12px; padding: 4px 12px; }
+        
+        /* 模态框美化 */
+        .modal-content {
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-glass);
+            border-radius: 24px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        }
+        body.dark-mode .modal-content { color: var(--text-main); }
+        .modal-header, .modal-footer { border-color: var(--border-glass); }
+        .form-control, .form-select {
+            background: rgba(255,255,255,0.5);
+            border: 1px solid var(--border-glass);
+            border-radius: 10px;
+            color: var(--text-main);
+        }
+        body.dark-mode .form-control, body.dark-mode .form-select {
+            background: rgba(0,0,0,0.3); border-color: rgba(255,255,255,0.1); color: white;
+        }
+
+        .theme-btn { background: transparent; border: none; cursor: pointer; font-size: 20px; padding: 8px; border-radius: 50%; }
+        .theme-btn:hover { background: rgba(0,0,0,0.05); }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/">
-                <i class="fas fa-server"></i> 服务器监控系统
-            </a>
-            <div class="navbar-nav ms-auto">
-                <a class="nav-link" href="/">首页</a>
-                <a class="nav-link" href="/monitor_dashboard">监控大屏</a>
-                <a class="nav-link" href="/monitor_management">监控管理</a>
-                <a class="nav-link active" href="/alerts">告警管理</a>
-                <a class="nav-link" href="/historical_data">历史数据</a>
-            </div>
-        </div>
-    </nav>
 
-    <div class="container mt-4">
-        <div class="row">
-            <div class="col-md-8">
-                <h2><i class="fas fa-bell text-warning"></i> 告警管理</h2>
-                <p class="text-muted">监控系统告警规则和通知管理</p>
+    <!-- 导航栏 -->
+    <div class="nav-header">
+        <div class="logo">🔔 告警管理</div>
+        <div class="nav-pills">
+            <a class="nav-item" href="/">主机列表</a>
+            <a class="nav-item" href="/monitor_dashboard">数据大屏</a>
+            <a class="nav-item" href="/monitor_management">监控配置</a>
+            <a class="nav-item active" href="/alerts">告警管理</a>
+            <a class="nav-item" href="/historical_data">历史数据</a>
+        </div>
+        <button class="theme-btn" id="themeToggle" onclick="cycleTheme()">🌗</button>
+    </div>
+
+    <div class="container">
+        <!-- 头部 -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2 style="font-weight: 700; margin: 0;">告警中心</h2>
+                <p style="color: var(--text-secondary); margin: 0; font-size: 14px;">管理系统告警规则与通知</p>
             </div>
-            <div class="col-md-4 text-end">
-                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createRuleModal">
-                    <i class="fas fa-plus"></i> 创建告警规则
-                </button>
-            </div>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createRuleModal">
+                <i class="fas fa-plus"></i> 创建新规则
+            </button>
         </div>
 
-        <!-- 活跃告警 -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header bg-warning text-dark">
-                        <h5 class="mb-0">
-                            <i class="fas fa-exclamation-triangle"></i> 活跃告警
-                            <span id="activeAlertsCount" class="badge bg-danger ms-2">0</span>
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <div id="activeAlertsList" class="alert-list">
-                            <!-- 活跃告警将在这里动态加载 -->
-                        </div>
-                    </div>
-                </div>
+        <!-- 活跃告警区 -->
+        <div class="glass-card">
+            <div class="card-header-custom">
+                <h5 class="text-warning"><i class="fas fa-bolt"></i> 活跃告警 <span id="activeAlertsCount" class="badge bg-danger rounded-pill ms-2">0</span></h5>
+            </div>
+            <div id="activeAlertsList" class="alert-console">
+                <!-- 动态内容加载 -->
             </div>
         </div>
 
-        <!-- 告警规则 -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0"><i class="fas fa-cog"></i> 告警规则</h5>
-                    </div>
-                    <div class="card-body">
-                        <div id="alertRulesList" class="row">
-                            <!-- 告警规则将在这里动态加载 -->
-                        </div>
-                    </div>
-                </div>
+        <!-- 规则列表区 -->
+        <div class="glass-card">
+            <div class="card-header-custom">
+                <h5><i class="fas fa-sliders-h"></i> 监控规则库</h5>
+            </div>
+            <div id="alertRulesList" class="row g-4">
+                <!-- 动态内容加载 -->
             </div>
         </div>
     </div>
 
-    <!-- 创建告警规则模态框 -->
+    <!-- 创建规则模态框 -->
     <div class="modal fade" id="createRuleModal" tabindex="-1">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">创建告警规则</h5>
@@ -92,269 +214,222 @@
                 <div class="modal-body">
                     <form id="createRuleForm">
                         <div class="mb-3">
-                            <label class="form-label">规则名称</label>
-                            <input type="text" class="form-control" name="rule_name" required>
+                            <label class="form-label small fw-bold text-secondary">规则名称</label>
+                            <input type="text" class="form-control" name="rule_name" placeholder="例如：CPU过载报警" required>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">目标主机</label>
-                            <select class="form-control" name="host_ip" required>
-                                <!-- 主机选项将动态加载 -->
-                            </select>
+                            <label class="form-label small fw-bold text-secondary">目标主机</label>
+                            <select class="form-select" name="host_ip" required></select>
+                        </div>
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label class="form-label small fw-bold text-secondary">监控指标</label>
+                                <select class="form-select" name="metric_type" required>
+                                    <option value="cpu">CPU使用率</option>
+                                    <option value="memory">内存使用率</option>
+                                    <option value="disk">磁盘使用率</option>
+                                </select>
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label class="form-label small fw-bold text-secondary">比较方式</label>
+                                <select class="form-select" name="comparison_operator" required>
+                                    <option value=">">大于 (>)</option>
+                                    <option value=">=">大于等于 (>=)</option>
+                                    <option value="<">小于 (<)</option>
+                                </select>
+                            </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">监控指标</label>
-                            <select class="form-control" name="metric_type" required>
-                                <option value="cpu">CPU使用率</option>
-                                <option value="memory">内存使用率</option>
-                                <option value="disk">磁盘使用率</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">比较运算符</label>
-                            <select class="form-control" name="comparison_operator" required>
-                                <option value=">">大于</option>
-                                <option value=">=">大于等于</option>
-                                <option value="<">小于</option>
-                                <option value="<=">小于等于</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">阈值 (%)</label>
-                            <input type="number" class="form-control" name="threshold_value" min="0" max="100" step="0.1" required>
+                            <label class="form-label small fw-bold text-secondary">触发阈值 (%)</label>
+                            <input type="number" class="form-control" name="threshold_value" min="0" max="100" step="0.1" value="80" required>
                         </div>
                     </form>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" onclick="createAlertRule()">创建规则</button>
+                    <button type="button" class="btn btn-secondary rounded-pill" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="createAlertRule()">确认创建</button>
                 </div>
             </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // 页面加载时初始化
+        // === 风格统一逻辑 ===
+        const themeBtn = document.getElementById('themeToggle');
+        let currentMode = localStorage.getItem('themeMode') || 'auto';
+
+        function applyTheme() {
+            let isDark = false;
+            if (currentMode === 'auto') {
+                const h = new Date().getHours();
+                isDark = (h < 6 || h >= 18);
+            } else if (currentMode === 'dark') isDark = true;
+            
+            if (isDark) { document.body.classList.add('dark-mode'); themeBtn.textContent = '🌙'; }
+            else { document.body.classList.remove('dark-mode'); themeBtn.textContent = '☀️'; }
+        }
+        function cycleTheme() {
+            const modes = ['auto', 'light', 'dark'];
+            const idx = modes.indexOf(currentMode);
+            currentMode = modes[(idx + 1) % modes.length];
+            localStorage.setItem('themeMode', currentMode);
+            applyTheme();
+        }
+        
+        const savedBg = localStorage.getItem('customWallpaper');
+        if (savedBg) document.body.style.backgroundImage = `url('${savedBg}')`;
+        
+        // 启动
         document.addEventListener('DOMContentLoaded', function() {
+            applyTheme();
             loadActiveAlerts();
             loadAlertRules();
             loadHostsForRuleCreation();
+            setInterval(applyTheme, 60000);
+            setInterval(loadActiveAlerts, 30000);
         });
 
-        // 加载活跃告警
+        // === 业务逻辑 ===
         async function loadActiveAlerts() {
             try {
                 const response = await fetch('/api/alerts/active');
                 const alerts = await response.json();
                 
                 const container = document.getElementById('activeAlertsList');
-                const countElement = document.getElementById('activeAlertsCount');
-                
-                countElement.textContent = alerts.length;
+                document.getElementById('activeAlertsCount').textContent = alerts.length;
                 
                 if (alerts.length === 0) {
-                    container.innerHTML = '<div class="alert alert-success">暂无活跃告警</div>';
+                    container.innerHTML = '<div class="text-center p-4 text-muted"><i class="fas fa-check-circle text-success mb-2" style="font-size:24px;"></i><br>系统运行正常，无活跃告警</div>';
                     return;
                 }
 
                 let html = '';
                 alerts.forEach(alert => {
-                    const severityClass = `alert-${alert.severity}`;
+                    const severityMap = { 'critical': 'severity-critical', 'high': 'severity-high', 'medium': 'severity-medium', 'low': 'severity-low' };
+                    const cls = severityMap[alert.severity] || 'severity-medium';
+                    
                     html += `
-                        <div class="alert ${severityClass} d-flex justify-content-between align-items-center">
-                            <div>
-                                <strong>${alert.message}</strong><br>
-                                <small class="text-muted">触发时间: ${new Date(alert.created_at).toLocaleString()}</small>
+                        <div class="alert-item ${cls}">
+                            <div class="alert-content">
+                                <strong>${alert.message}</strong>
+                                <span class="alert-time"><i class="far fa-clock"></i> ${new Date(alert.created_at).toLocaleString()}</span>
                             </div>
-                            <button class="btn btn-sm btn-outline-primary" onclick="resolveAlert(${alert.id})">
-                                标记为已解决
+                            <button class="btn btn-sm btn-outline-primary btn-sm-rounded" onclick="resolveAlert(${alert.id})">
+                                <i class="fas fa-check"></i> 已解决
                             </button>
                         </div>
                     `;
                 });
                 container.innerHTML = html;
-            } catch (error) {
-                console.error('加载告警失败:', error);
-            }
+            } catch (error) { console.error(error); }
         }
 
-        // 加载告警规则
         async function loadAlertRules() {
             try {
                 const response = await fetch('/api/alert_rules');
                 const rules = await response.json();
-                
                 const container = document.getElementById('alertRulesList');
                 
                 if (rules.length === 0) {
-                    container.innerHTML = '<div class="col-12"><div class="alert alert-info">暂无告警规则</div></div>';
+                    container.innerHTML = '<div class="col-12 text-center text-muted">暂无告警规则，请点击右上角创建</div>';
                     return;
                 }
 
+                const metricNames = { 'cpu': 'CPU使用率', 'memory': '内存使用率', 'disk': '磁盘使用率' };
                 let html = '';
+                
                 rules.forEach(rule => {
-                    const metricNames = {
-                        'cpu': 'CPU使用率',
-                        'memory': '内存使用率', 
-                        'disk': '磁盘使用率'
-                    };
-                    
                     html += `
-                        <div class="col-md-6 mb-3">
-                            <div class="card rule-card">
-                                <div class="card-body">
-                                    <h6 class="card-title">${rule.rule_name}</h6>
-                                    <p class="card-text">
-                                        <small class="text-muted">
-                                            主机: ${rule.host_ip}<br>
-                                            指标: ${metricNames[rule.metric_type]} ${rule.comparison_operator} ${rule.threshold_value}%<br>
-                                            状态: ${rule.is_active ? '<span class="text-success">启用</span>' : '<span class="text-danger">禁用</span>'}
-                                        </small>
-                                    </p>
-                                    <div class="d-flex justify-content-between">
-                                        <small class="text-muted">创建: ${new Date(rule.created_at).toLocaleDateString()}</small>
-                                        <button class="btn btn-sm btn-danger" onclick="deleteAlertRule(${rule.id})">
-                                            <i class="fas fa-trash"></i> 删除
-                                        </button>
+                        <div class="col-md-6 col-lg-4">
+                            <div class="rule-card">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div class="rule-title">${rule.rule_name}</div>
+                                    <div class="rule-badge ${rule.is_active ? 'text-success' : 'text-secondary'}">
+                                        ${rule.is_active ? '● 启用' : '○ 禁用'}
                                     </div>
+                                </div>
+                                <div class="rule-info">
+                                    <div>主机：${rule.host_ip}</div>
+                                    <div>条件：${metricNames[rule.metric_type]} ${rule.comparison_operator} ${rule.threshold_value}%</div>
+                                    <div class="mt-2 text-muted" style="font-size:12px;">创建于 ${new Date(rule.created_at).toLocaleDateString()}</div>
+                                </div>
+                                <div class="text-end">
+                                    <button class="btn btn-sm btn-outline-danger btn-sm-rounded" onclick="deleteAlertRule(${rule.id})">
+                                        <i class="fas fa-trash-alt"></i> 删除
+                                    </button>
                                 </div>
                             </div>
                         </div>
                     `;
                 });
                 container.innerHTML = html;
-            } catch (error) {
-                console.error('加载规则失败:', error);
-            }
+            } catch (error) { console.error(error); }
         }
 
-// 为主机选择框加载主机列表
-async function loadHostsForRuleCreation() {
-    try {
-        const response = await fetch('/api/hosts');
-        const data = await response.json();
-        
-        const select = document.querySelector('select[name="host_ip"]');
-        select.innerHTML = '';
-        
-        // 正确获取主机数组：从data.hosts对象中提取值
-        const hosts = Object.values(data.hosts);
-        
-        // 遍历主机数组
-        hosts.forEach(host => {
-            const option = document.createElement('option');
-            option.value = host.ip;
-            option.textContent = `${host.ip} (${host.user})`;
-            select.appendChild(option);
-        });
-        
-        // 如果没有主机，显示提示
-        if (hosts.length === 0) {
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = '暂无可用主机，请先添加主机';
-            option.disabled = true;
-            select.appendChild(option);
-        }
-    } catch (error) {
-        console.error('加载主机列表失败:', error);
-        const select = document.querySelector('select[name="host_ip"]');
-        select.innerHTML = '<option value="" disabled>加载主机失败，请刷新页面</option>';
-    }
-}
-
-// 创建告警规则
-async function createAlertRule() {
-    const form = document.getElementById('createRuleForm');
-    const formData = new FormData(form);
-    
-    const ruleData = {
-        rule_name: formData.get('rule_name'),
-        host_ip: formData.get('host_ip'),
-        metric_type: formData.get('metric_type'),
-        comparison_operator: formData.get('comparison_operator'),
-        threshold_value: parseFloat(formData.get('threshold_value'))
-    };
-
-    try {
-        const response = await fetch('/api/alert_rules', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(ruleData)
-        });
-
-        const result = await response.json();
-        
-        if (result.success) {
-            alert('告警规则创建成功');
-            
-            // 修复：使用原生JavaScript关闭模态框，避免jQuery依赖
-            const modal = document.getElementById('createRuleModal');
-            const bootstrapModal = bootstrap.Modal.getInstance(modal);
-            bootstrapModal.hide();
-            
-            form.reset();
-            loadAlertRules();
-        } else {
-            alert('创建失败: ' + result.message);
-        }
-    } catch (error) {
-        console.error('创建规则失败:', error);
-        alert('创建失败: ' + error.message);
-    }
-}
-
-        // 删除告警规则
-        async function deleteAlertRule(ruleId) {
-            if (!confirm('确定要删除这个告警规则吗？')) return;
-            
+        async function loadHostsForRuleCreation() {
             try {
-                const response = await fetch(`/api/alert_rules/${ruleId}`, {
-                    method: 'DELETE'
+                const response = await fetch('/api/hosts');
+                const data = await response.json();
+                const select = document.querySelector('select[name="host_ip"]');
+                select.innerHTML = '';
+                const hosts = Object.values(data.hosts);
+                
+                if (hosts.length === 0) {
+                    select.innerHTML = '<option disabled selected>无可用主机</option>';
+                    return;
+                }
+                hosts.forEach(host => {
+                    const opt = document.createElement('option');
+                    opt.value = host.ip;
+                    opt.textContent = `${host.ip} (${host.user})`;
+                    select.appendChild(opt);
                 });
+            } catch (error) { console.error(error); }
+        }
 
+        async function createAlertRule() {
+            const form = document.getElementById('createRuleForm');
+            if(!form.checkValidity()) { form.reportValidity(); return; }
+            
+            const formData = new FormData(form);
+            const ruleData = Object.fromEntries(formData.entries());
+            ruleData.threshold_value = parseFloat(ruleData.threshold_value);
+
+            try {
+                const response = await fetch('/api/alert_rules', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(ruleData)
+                });
                 const result = await response.json();
                 
                 if (result.success) {
-                    alert('告警规则删除成功');
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('createRuleModal'));
+                    modal.hide();
+                    form.reset();
                     loadAlertRules();
-                } else {
-                    alert('删除失败: ' + result.message);
-                }
-            } catch (error) {
-                console.error('删除规则失败:', error);
-                alert('删除失败，请检查网络连接');
-            }
+                } else { alert('失败: ' + result.message); }
+            } catch (error) { alert('请求错误'); }
         }
 
-        // 解决告警
-        async function resolveAlert(alertId) {
+        async function deleteAlertRule(id) {
+            if (!confirm('确定删除此规则？')) return;
             try {
-                const response = await fetch(`/api/alerts/${alertId}/resolve`, {
-                    method: 'POST'
-                });
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('告警已标记为已解决');
-                    loadActiveAlerts();
-                } else {
-                    alert('操作失败: ' + result.message);
-                }
-            } catch (error) {
-                console.error('解决告警失败:', error);
-                alert('操作失败，请检查网络连接');
-            }
+                const res = await fetch(`/api/alert_rules/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if(data.success) loadAlertRules();
+                else alert(data.message);
+            } catch(e) { console.error(e); }
         }
 
-        // 定时刷新活跃告警（每30秒）
-        setInterval(loadActiveAlerts, 30000);
+        async function resolveAlert(id) {
+            try {
+                const res = await fetch(`/api/alerts/${id}/resolve`, { method: 'POST' });
+                const data = await res.json();
+                if(data.success) loadActiveAlerts();
+            } catch(e) { console.error(e); }
+        }
     </script>
 </body>
 </html>
-

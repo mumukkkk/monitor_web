@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>趋势预测与容量规划</title>
+    <!-- 引入基础CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <!-- 引入ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.2/dist/echarts.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --light-bg: #f8f9fa;
+            --dark-bg: #343a40;
+            --card-bg: #ffffff;
+            --text-color: #333333;
+            --border-color: #dee2e6;
+        }
+
+        [data-theme="dark"] {
+            --primary-color: #17a2b8;
+            --secondary-color: #adb5bd;
+            --success-color: #20c997;
+            --warning-color: #fd7e14;
+            --danger-color: #e83e8c;
+            --light-bg: #212529;
+            --dark-bg: #16181b;
+            --card-bg: #2c3034;
+            --text-color: #f8f9fa;
+            --border-color: #495057;
+        }
+
+        body {
+            background-color: var(--light-bg);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            transition: box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .card-header {
+            background-color: var(--primary-color);
+            color: white;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            padding: 12px 20px;
+            font-weight: 600;
+        }
+
+        .card-body {
+            padding: 20px;
+        }
+
+        .form-control {
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border-color: var(--border-color);
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: #0056b3;
+            border-color: #0056b3;
+        }
+
+        .chart-container {
+            height: 400px;
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: var(--card-bg);
+            color: var(--primary-color);
+            border-color: var(--border-color) var(--border-color) var(--card-bg);
+        }
+
+        .nav-tabs .nav-link {
+            color: var(--secondary-color);
+        }
+
+        .prediction-metrics {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.9rem;
+            color: var(--secondary-color);
+        }
+
+        .capacity-recommendation {
+            background-color: rgba(40, 167, 69, 0.1);
+            border-left: 4px solid var(--success-color);
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .capacity-warning {
+            background-color: rgba(255, 193, 7, 0.1);
+            border-left: 4px solid var(--warning-color);
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .capacity-danger {
+            background-color: rgba(220, 53, 69, 0.1);
+            border-left: 4px solid var(--danger-color);
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .scrollable-content {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        @media (max-width: 768px) {
+            .prediction-metrics {
+                flex-direction: column;
+            }
+            
+            .metric-card {
+                margin: 10px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <nav class="navbar navbar-expand-lg navbar-light bg-light">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/">监控系统</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarNav">
+                    <ul class="navbar-nav">
+                        <li class="nav-item">
+                            <a class="nav-link" href="/monitor_dashboard">监控面板</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/historical_data">历史数据</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link active" href="/trend_prediction">趋势预测</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="/alerts">告警管理</a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        <div class="row mt-4">
+            <div class="col-lg-12">
+                <div class="card">
+                    <div class="card-header">趋势预测与容量规划</div>
+                    <div class="card-body">
+                        <div class="row mb-4">
+                            <div class="col-md-3">
+                                <select id="hostSelect" class="form-control">
+                                    <option value="">-- 选择主机 --</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <select id="metricTypeSelect" class="form-control">
+                                    <option value="cpu">CPU使用率</option>
+                                    <option value="memory">内存使用率</option>
+                                    <option value="disk">磁盘使用率</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <select id="predictionMethodSelect" class="form-control">
+                                    <option value="linear">线性回归</option>
+                                    <option value="moving_avg">移动平均线</option>
+                                    <option value="exponential">指数平滑</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <select id="daysToPredictSelect" class="form-control">
+                                    <option value="7">7天</option>
+                                    <option value="15">15天</option>
+                                    <option value="30">30天</option>
+                                    <option value="90">90天</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <button id="predictBtn" class="btn btn-primary me-2">生成预测</button>
+                                <button id="viewCapacityPlanBtn" class="btn btn-secondary">查看容量规划</button>
+                            </div>
+                        </div>
+
+                        <ul class="nav nav-tabs" id="predictionTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="trend-tab" data-bs-toggle="tab" data-bs-target="#trend" type="button" role="tab" aria-controls="trend" aria-selected="true">趋势图表</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="capacity-tab" data-bs-toggle="tab" data-bs-target="#capacity" type="button" role="tab" aria-controls="capacity" aria-selected="false">容量规划</button>
+                            </li>
+                        </ul>
+
+                        <div class="tab-content" id="predictionTabsContent">
+                            <!-- 趋势图表标签页 -->
+                            <div class="tab-pane fade show active" id="trend" role="tabpanel" aria-labelledby="trend-tab">
+                                <div class="prediction-metrics">
+                                    <div class="metric-card">
+                                        <div class="metric-label">当前使用率</div>
+                                        <div id="currentValue" class="metric-value">--</div>
+                                    </div>
+                                    <div class="metric-card">
+                                        <div class="metric-label">预测峰值 (未来7天)</div>
+                                        <div id="predictedPeak" class="metric-value">--</div>
+                                    </div>
+                                    <div class="metric-card">
+                                        <div class="metric-label">增长趋势</div>
+                                        <div id="growthRate" class="metric-value">--</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="chart-container" id="predictionChart"></div>
+                                
+                                <div id="confidenceIntervalInfo" class="mt-3 text-muted">
+                                    <small>* 图表中的阴影区域表示预测的95%置信区间</small>
+                                </div>
+                            </div>
+
+                            <!-- 容量规划标签页 -->
+                            <div class="tab-pane fade" id="capacity" role="tabpanel" aria-labelledby="capacity-tab">
+                                <div id="capacityPlanLoading" class="text-center py-5">
+                                    <p>请点击"查看容量规划"按钮生成容量规划建议</p>
+                                </div>
+                                
+                                <div id="capacityPlanContent" style="display: none;">
+                                    <h5 class="mt-3">容量规划建议</h5>
+                                    <div id="capacityRecommendations" class="mt-3"></div>
+                                    
+                                    <div class="chart-container mt-4" id="capacityForecastChart"></div>
+                                    
+                                    <h5 class="mt-5">资源使用趋势预测</h5>
+                                    <div class="scrollable-content mt-3">
+                                        <table class="table table-striped table-hover">
+                                            <thead>
+                                                <tr>
+                                                    <th>日期</th>
+                                                    <th>CPU使用率 (%)</th>
+                                                    <th>内存使用率 (%)</th>
+                                                    <th>磁盘使用率 (%)</th>
+                                                    <th>建议</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="capacityPlanTableBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入基础JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 全局变量
+        let predictionChart = null;
+        let capacityForecastChart = null;
+        let currentHostIp = '';
+        
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化图表
+            initCharts();
+            
+            // 加载主机列表
+            loadHosts();
+            
+            // 绑定事件监听
+            document.getElementById('predictBtn').addEventListener('click', function() {
+                generatePrediction();
+            });
+            
+            document.getElementById('viewCapacityPlanBtn').addEventListener('click', function() {
+                loadCapacityPlan();
+            });
+        });
+        
+        // 初始化图表
+        function initCharts() {
+            // 趋势预测图表
+            predictionChart = echarts.init(document.getElementById('predictionChart'));
+            predictionChart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        let result = params[0].name + '<br/>';
+                        params.forEach(function(item) {
+                            result += item.marker + item.seriesName + ': ' + item.value + '%<br/>';
+                        });
+                        return result;
+                    }
+                },
+                legend: {
+                    data: ['历史数据', '预测数据'],
+                    textStyle: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                grid: {
+                    left: '3%',
+                    right: '4%',
+                    bottom: '3%',
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'time',
+                    boundaryGap: false,
+                    axisLabel: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: '使用率 (%)',
+                    min: 0,
+                    max: 100,
+                    axisLabel: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color'),
+                        formatter: '{value}%'
+                    }
+                },
+                series: [
+                    {
+                        name: '历史数据',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#007bff'
+                        }
+                    },
+                    {
+                        name: '预测数据',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#28a745'
+                        },
+                        areaStyle: {
+                            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                {
+                                    offset: 0,
+                                    color: 'rgba(40, 167, 69, 0.3)'
+                                },
+                                {
+                                    offset: 1,
+                                    color: 'rgba(40, 167, 69, 0.1)'
+                                }
+                            ])
+                        }
+                    }
+                ]
+            });
+            
+            // 容量预测图表
+            capacityForecastChart = echarts.init(document.getElementById('capacityForecastChart'));
+            capacityForecastChart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        let result = params[0].name + '<br/>';
+                        params.forEach(function(item) {
+                            result += item.marker + item.seriesName + ': ' + item.value + '%<br/>';
+                        });
+                        return result;
+                    }
+                },
+                legend: {
+                    data: ['CPU使用率', '内存使用率', '磁盘使用率', '警戒线 (80%)'],
+                    textStyle: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                grid: {
+                    left: '3%',
+                    right: '4%',
+                    bottom: '3%',
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'time',
+                    boundaryGap: false,
+                    axisLabel: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: '使用率 (%)',
+                    min: 0,
+                    max: 100,
+                    axisLabel: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color'),
+                        formatter: '{value}%'
+                    }
+                },
+                series: [
+                    {
+                        name: 'CPU使用率',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#007bff'
+                        }
+                    },
+                    {
+                        name: '内存使用率',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#28a745'
+                        }
+                    },
+                    {
+                        name: '磁盘使用率',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#ffc107'
+                        }
+                    },
+                    {
+                        name: '警戒线 (80%)',
+                        type: 'line',
+                        data: [],
+                        itemStyle: {
+                            color: '#dc3545'
+                        },
+                        lineStyle: {
+                            type: 'dashed'
+                        }
+                    }
+                ]
+            });
+            
+            // 响应式调整
+            window.addEventListener('resize', function() {
+                predictionChart.resize();
+                capacityForecastChart.resize();
+            });
+        }
+        
+        // 加载主机列表
+        function loadHosts() {
+            // 这里应该从API获取主机列表
+            // 暂时使用模拟数据
+            const hostSelect = document.getElementById('hostSelect');
+            const mockHosts = [
+                { ip: '192.168.1.101', name: 'Web服务器1' },
+                { ip: '192.168.1.102', name: 'Web服务器2' },
+                { ip: '192.168.1.103', name: '数据库服务器' },
+                { ip: '192.168.1.104', name: '应用服务器' }
+            ];
+            
+            mockHosts.forEach(function(host) {
+                const option = document.createElement('option');
+                option.value = host.ip;
+                option.textContent = host.name + ' (' + host.ip + ')';
+                hostSelect.appendChild(option);
+            });
+        }
+        
+        // 生成预测
+        function generatePrediction() {
+            const hostIp = document.getElementById('hostSelect').value;
+            const metricType = document.getElementById('metricTypeSelect').value;
+            const method = document.getElementById('predictionMethodSelect').value;
+            const days = document.getElementById('daysToPredictSelect').value;
+            
+            if (!hostIp) {
+                alert('请选择主机');
+                return;
+            }
+            
+            currentHostIp = hostIp;
+            
+            // 显示加载状态
+            document.getElementById('predictBtn').disabled = true;
+            document.getElementById('predictBtn').textContent = '生成中...';
+            
+            // 发送请求获取预测数据
+            fetch(`/api/predict_trend?ip=${hostIp}&metric_type=${metricType}&method=${method}&days=${days}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updatePredictionChart(data.data, metricType);
+                        updatePredictionMetrics(data.data);
+                    } else {
+                        alert('生成预测失败: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('错误:', error);
+                    alert('生成预测时发生错误');
+                })
+                .finally(() => {
+                    document.getElementById('predictBtn').disabled = false;
+                    document.getElementById('predictBtn').textContent = '生成预测';
+                });
+        }
+        
+        // 更新预测图表
+        function updatePredictionChart(predictionData, metricType) {
+            // 分离历史数据和预测数据
+            const historicalData = predictionData.historical_data.map(item => [new Date(item.timestamp), item.value]);
+            const predictedData = predictionData.predicted_data.map(item => [new Date(item.timestamp), item.value]);
+            
+            // 更新图表
+            predictionChart.setOption({
+                title: {
+                    text: `${metricType === 'cpu' ? 'CPU' : metricType === 'memory' ? '内存' : '磁盘'}使用率趋势预测`,
+                    textStyle: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                series: [
+                    {
+                        name: '历史数据',
+                        data: historicalData
+                    },
+                    {
+                        name: '预测数据',
+                        data: predictedData
+                    }
+                ]
+            });
+        }
+        
+        // 更新预测指标
+        function updatePredictionMetrics(predictionData) {
+            const historicalData = predictionData.historical_data;
+            const predictedData = predictionData.predicted_data;
+            
+            // 计算当前值（最新的历史数据）
+            const currentValue = historicalData.length > 0 ? historicalData[historicalData.length - 1].value.toFixed(2) : '--';
+            
+            // 计算预测峰值
+            const maxPredicted = Math.max(...predictedData.map(item => item.value));
+            const predictedPeak = maxPredicted.toFixed(2);
+            
+            // 计算增长率
+            let growthRate = '--';
+            if (historicalData.length > 0 && predictedData.length > 0) {
+                const startValue = historicalData[0].value;
+                const endValue = predictedData[predictedData.length - 1].value;
+                const growth = ((endValue - startValue) / startValue * 100).toFixed(2);
+                growthRate = growth + '%';
+            }
+            
+            // 更新DOM
+            document.getElementById('currentValue').textContent = currentValue + '%';
+            document.getElementById('predictedPeak').textContent = predictedPeak + '%';
+            document.getElementById('growthRate').textContent = growthRate;
+            
+            // 根据预测峰值设置警告颜色
+            const predictedPeakElement = document.getElementById('predictedPeak');
+            if (predictedPeak > 80) {
+                predictedPeakElement.style.color = getComputedStyle(document.documentElement).getPropertyValue('--danger-color');
+            } else if (predictedPeak > 70) {
+                predictedPeakElement.style.color = getComputedStyle(document.documentElement).getPropertyValue('--warning-color');
+            } else {
+                predictedPeakElement.style.color = getComputedStyle(document.documentElement).getPropertyValue('--success-color');
+            }
+        }
+        
+        // 加载容量规划
+        function loadCapacityPlan() {
+            const hostIp = document.getElementById('hostSelect').value || '';
+            const days = document.getElementById('daysToPredictSelect').value;
+            const method = document.getElementById('predictionMethodSelect').value;
+            
+            // 显示加载状态
+            document.getElementById('viewCapacityPlanBtn').disabled = true;
+            document.getElementById('viewCapacityPlanBtn').textContent = '加载中...';
+            document.getElementById('capacityPlanLoading').style.display = 'block';
+            document.getElementById('capacityPlanContent').style.display = 'none';
+            
+            // 发送请求获取容量规划数据
+            let url = `/api/capacity_plan?days=${days}&method=${method}`;
+            if (hostIp) {
+                url += `&ip=${hostIp}`;
+                currentHostIp = hostIp;
+            }
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // 切换到容量规划标签页
+                        const capacityTab = new bootstrap.Tab(document.getElementById('capacity-tab'));
+                        capacityTab.show();
+                        
+                        // 更新容量规划内容
+                        updateCapacityPlanContent(data.data);
+                        updateCapacityForecastChart(data.data);
+                        updateCapacityPlanTable(data.data);
+                        
+                        document.getElementById('capacityPlanLoading').style.display = 'none';
+                        document.getElementById('capacityPlanContent').style.display = 'block';
+                    } else {
+                        alert('加载容量规划失败: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('错误:', error);
+                    alert('加载容量规划时发生错误');
+                })
+                .finally(() => {
+                    document.getElementById('viewCapacityPlanBtn').disabled = false;
+                    document.getElementById('viewCapacityPlanBtn').textContent = '查看容量规划';
+                });
+        }
+        
+        // 更新容量规划内容
+        function updateCapacityPlanContent(planData) {
+            const recommendationsDiv = document.getElementById('capacityRecommendations');
+            recommendationsDiv.innerHTML = '';
+            
+            if (planData.overall_assessment) {
+                const assessmentDiv = document.createElement('div');
+                assessmentDiv.className = 'capacity-recommendation';
+                assessmentDiv.innerHTML = `<strong>总体评估:</strong> ${planData.overall_assessment}`;
+                recommendationsDiv.appendChild(assessmentDiv);
+            }
+            
+            if (planData.recommendations) {
+                planData.recommendations.forEach(rec => {
+                    const recDiv = document.createElement('div');
+                    
+                    // 根据严重程度设置样式
+                    if (rec.severity === 'critical') {
+                        recDiv.className = 'capacity-danger';
+                    } else if (rec.severity === 'warning') {
+                        recDiv.className = 'capacity-warning';
+                    } else {
+                        recDiv.className = 'capacity-recommendation';
+                    }
+                    
+                    recDiv.innerHTML = `<strong>${rec.metric.toUpperCase()} 建议:</strong> ${rec.advice}`;
+                    recommendationsDiv.appendChild(recDiv);
+                });
+            }
+            
+            if (planData.cost_analysis) {
+                const costDiv = document.createElement('div');
+                costDiv.className = 'capacity-recommendation';
+                costDiv.innerHTML = `<strong>成本分析:</strong> ${planData.cost_analysis}`;
+                recommendationsDiv.appendChild(costDiv);
+            }
+        }
+        
+        // 更新容量预测图表
+        function updateCapacityForecastChart(planData) {
+            if (!planData.forecast_data || planData.forecast_data.length === 0) {
+                return;
+            }
+            
+            // 准备数据
+            const cpuData = [];
+            const memoryData = [];
+            const diskData = [];
+            const thresholdData = [];
+            
+            planData.forecast_data.forEach(item => {
+                const date = new Date(item.timestamp);
+                cpuData.push([date, item.cpu_usage || 0]);
+                memoryData.push([date, item.memory_usage || 0]);
+                diskData.push([date, item.disk_usage || 0]);
+                thresholdData.push([date, 80]);
+            });
+            
+            // 更新图表
+            capacityForecastChart.setOption({
+                title: {
+                    text: currentHostIp ? `主机 ${currentHostIp} 容量预测` : '集群容量预测',
+                    textStyle: {
+                        color: getComputedStyle(document.documentElement).getPropertyValue('--text-color')
+                    }
+                },
+                series: [
+                    {
+                        name: 'CPU使用率',
+                        data: cpuData
+                    },
+                    {
+                        name: '内存使用率',
+                        data: memoryData
+                    },
+                    {
+                        name: '磁盘使用率',
+                        data: diskData
+                    },
+                    {
+                        name: '警戒线 (80%)',
+                        data: thresholdData
+                    }
+                ]
+            });
+        }
+        
+        // 更新容量规划表格
+        function updateCapacityPlanTable(planData) {
+            const tableBody = document.getElementById('capacityPlanTableBody');
+            tableBody.innerHTML = '';
+            
+            if (!planData.forecast_data || planData.forecast_data.length === 0) {
+                return;
+            }
+            
+            planData.forecast_data.forEach(item => {
+                const row = document.createElement('tr');
+                const date = new Date(item.timestamp).toLocaleDateString();
+                
+                // 获取该日期的建议
+                let dailyRecommendation = '';
+                if (planData.recommendations_by_date && planData.recommendations_by_date[item.timestamp]) {
+                    dailyRecommendation = planData.recommendations_by_date[item.timestamp];
+                }
+                
+                row.innerHTML = `
+                    <td>${date}</td>
+                    <td>${(item.cpu_usage || 0).toFixed(2)}%</td>
+                    <td>${(item.memory_usage || 0).toFixed(2)}%</td>
+                    <td>${(item.disk_usage || 0).toFixed(2)}%</td>
+                    <td>${dailyRecommendation}</td>
+                `;
+                
+                // 根据使用率设置行颜色
+                const maxUsage = Math.max(item.cpu_usage || 0, item.memory_usage || 0, item.disk_usage || 0);
+                if (maxUsage > 80) {
+                    row.classList.add('table-danger');
+                } else if (maxUsage > 70) {
+                    row.classList.add('table-warning');
+                }
+                
+                tableBody.appendChild(row);
+            });
+        }
+    </script>
+</body>
+</html>
