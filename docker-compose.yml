@@ -1,0 +1,23 @@
+version: '3.3'
+
+services:
+  server-monitor:
+    build: .
+    image: server-monitor:latest
+    container_name: server-monitor
+    ports:
+      - "80:80"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./server_monitor.db:/app/server_monitor.db
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    networks:
+      - monitor-network
+
+networks:
+  monitor-network:
+    driver: bridge
+

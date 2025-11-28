@@ -13,5 +13,10 @@ RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r re
 
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+
+RUN mkdir -p /app/data
+RUN mkdir -p /app/logs
+
 EXPOSE 80
+
 CMD ["python", "init.py"]
