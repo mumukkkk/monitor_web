@@ -7,11 +7,12 @@ import time
 import subprocess
 import json
 import re
+import pytz 
 from datetime import datetime
 
 from datetime import datetime, timezone
-import pytz 
 
+shanghai_tz = pytz.timezone('Asia/Shanghai')
 
 # 导入密码解密模块
 from privacy import decrypt_password
@@ -30,6 +31,7 @@ def init_db():
     """初始化数据库，创建表"""
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
+    cursor.execute("PRAGMA timezone = 'Asia/Shanghai'")
     
     # 创建主机表，ip、user和port为联合主键
     cursor.execute('''
@@ -38,7 +40,7 @@ def init_db():
             user TEXT NOT NULL,
             encrypted_password TEXT NOT NULL,
             port INTEGER DEFAULT 22,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP NOT NULL,
             PRIMARY KEY (ip, user, port)
         )
     ''')
@@ -54,7 +56,7 @@ def init_db():
             network_rx REAL DEFAULT 0,
             network_tx REAL DEFAULT 0,
             is_online INTEGER DEFAULT 0,
-            log_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            log_time TIMESTAMP NOT NULL,
             log_type TEXT DEFAULT 'host_metrics'
         )
     ''')
@@ -81,7 +83,7 @@ def init_db():
             network_rx REAL DEFAULT 0,
             network_tx REAL DEFAULT 0,
             is_online INTEGER DEFAULT 0,
-            check_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            check_time TIMESTAMP NOT NULL,
             PRIMARY KEY (ip, check_time)
         )
     ''')
@@ -96,8 +98,8 @@ def init_db():
             threshold_value REAL NOT NULL,
             comparison_operator TEXT NOT NULL CHECK (comparison_operator IN ('>', '<', '>=', '<=')),
             is_active INTEGER DEFAULT 1,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL,
             FOREIGN KEY (host_ip) REFERENCES hosts (ip)
         )
     ''')
@@ -114,7 +116,7 @@ def init_db():
             message TEXT NOT NULL,
             severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
             is_resolved INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP NOT NULL,
             resolved_at TIMESTAMP,
             FOREIGN KEY (rule_id) REFERENCES alert_rules (id)
         )
@@ -443,10 +445,13 @@ def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0, n
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
         
+        
+        check_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         cursor.execute('''
-            INSERT INTO monitoring_data (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online))
+            INSERT INTO monitoring_data (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time))
         
         conn.commit()
         conn.close()
@@ -454,6 +459,7 @@ def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0, n
     except sqlite3.Error as e:
         print(f"数据库错误: {e}")
         return False
+
 
 def check_alerts(ip, cpu_usage, memory_usage, disk_usage):
     """检查告警条件并创建通知"""
@@ -1696,7 +1702,7 @@ def api_host_monitor_configs():
                 monitor_disk INTEGER DEFAULT 1,
                 monitor_network INTEGER DEFAULT 1,
                 status TEXT DEFAULT 'active',
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL,
                 PRIMARY KEY (ip, user, port)
             )
         ''')

@@ -2,6 +2,7 @@
 import os
 import subprocess
 import time
+import pytz 
 from datetime import datetime
 
 # 导入自定义模块
@@ -14,6 +15,7 @@ class MonitorScheduler:
     def __init__(self):
         self.db = DatabaseUtils()
         self.logger = MonitorLogger()
+        self.shanghai_tz = pytz.timezone('Asia/Shanghai')
     
     def collect_monitoring_data(self):
         """采集监控数据"""
@@ -38,6 +40,7 @@ class MonitorScheduler:
             try:
                 # 创建临时inventory文件
                 inventory_content = f"""
+            self.logger.info(f"{datetime.now(self.shanghai_tz)}: 监控数据采集完成")
 [all]
 {ip}
 
@@ -91,7 +94,7 @@ ansible_ssh_timeout={ANSIBLE_TIMEOUT}
                 except:
                     pass
         
-        self.logger.info(f"{datetime.now()}: 监控数据采集完成")
+        self.logger.info(f"{datetime.now(shanghai_tz)}: 监控数据采集完成")
     
     def _get_cpu_usage(self, ip):
         """获取CPU使用率"""
@@ -176,14 +179,17 @@ ansible_ssh_timeout={ANSIBLE_TIMEOUT}
         
         try:
             while True:
-                self.logger.info(f"{datetime.now()}: 开始采集监控数据")
+                self.logger.info(f"{datetime.now(shanghai_tz)}: 开始采集监控数据")
                 self.collect_monitoring_data()
-                self.logger.info(f"{datetime.now()}: 监控数据采集完成，等待{MONITOR_INTERVAL}秒")
+                self.logger.info(f"{datetime.now(shanghai_tz)}: 监控数据采集完成，等待{MONITOR_INTERVAL}秒")
                 time.sleep(MONITOR_INTERVAL)
         except KeyboardInterrupt:
             self.logger.info("监控已停止")
         except Exception as e:
             self.logger.error(f"监控过程中出错: {e}")
+
+        self.logger.info(f"{datetime.now(self.shanghai_tz)}: 开始采集监控数据")
+        self.logger.info(f"{datetime.now(self.shanghai_tz)}: 监控数据采集完成，等待{MONITOR_INTERVAL}秒")
 
 if __name__ == "__main__":
     import sys
