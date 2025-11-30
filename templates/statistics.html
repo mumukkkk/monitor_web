@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <title>统计分析 - Server Monitor</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            /* 核心变量：扁平化配色 */
+            --primary: #6366f1; /* 靛蓝 */
+            --primary-hover: #4f46e5;
+            --danger: #ef4444;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --text-main: #1f2937;
+            --text-secondary: #6b7280;
+            --bg-glass: rgba(255, 255, 255, 0.85);
+            --border-glass: rgba(255, 255, 255, 0.5);
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1);
+            --radius: 20px;
+            
+            /* 壁纸默认值 */
+            --wallpaper: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+
+        /* 深色模式变量覆盖 */
+        body.dark-mode {
+            --text-main: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-glass: rgba(30, 30, 30, 0.8);
+            --border-glass: rgba(255, 255, 255, 0.1);
+            --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --wallpaper: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+        }
+
+        * { box-sizing: border-box; outline: none; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            background: var(--wallpaper) center/cover fixed;
+            color: var(--text-main);
+            transition: color 0.3s;
+        }
+
+        /* === 顶部统一导航 (与 alerts.html 一致) === */
+        .nav-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 15px 30px;
+            border-radius: 50px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-glass);
+            width: 100%;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .logo { 
+            font-size: 20px; 
+            font-weight: 800; 
+            background: linear-gradient(to right, var(--primary), #8b5cf6); 
+            -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; 
+        }
+
+        .nav-pills { 
+            display: flex; 
+            gap: 5px; 
+            background: rgba(0,0,0,0.05); 
+            padding: 4px; 
+            border-radius: 30px; 
+        }
+        body.dark-mode .nav-pills { background: rgba(255,255,255,0.05); }
+
+        .nav-item { 
+            padding: 8px 20px; 
+            border-radius: 20px; 
+            text-decoration: none; 
+            color: var(--text-secondary);
+            font-size: 14px; 
+            font-weight: 500; 
+            transition: all 0.2s; 
+            border: none; 
+            background: transparent; 
+            cursor: pointer; 
+        }
+        .nav-item:hover { color: var(--text-main); }
+        .nav-item.active { 
+            background: white; 
+            color: var(--primary); 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05); 
+        }
+        body.dark-mode .nav-item.active { background: #404040; color: white; }
+
+        /* 操作按钮区 (主题/壁纸) */
+        .action-btns { display: flex; gap: 8px; }
+        .theme-btn { 
+            background: transparent; 
+            border: none; 
+            cursor: pointer; 
+            font-size: 18px; 
+            padding: 8px; 
+            border-radius: 50%; 
+            transition: background 0.2s; 
+        }
+        .theme-btn:hover { background: rgba(0,0,0,0.05); }
+
+        /* === 主内容卡片 === */
+        .app-container {
+            width: 100%;
+            max-width: 1200px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 30px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-glass);
+            margin: 0 auto;
+        }
+
+        /* 按钮样式 */
+        .btn-primary { 
+            background: var(--primary); 
+            color: white; 
+            border: none;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        }
+        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+
+        /* 控制面板 */
+        .control-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .control-group label {
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+
+        .control-group select,
+        .control-group input {
+            padding: 10px;
+            border: 1px solid var(--border-glass);
+            border-radius: 8px;
+            background: var(--bg-glass);
+            color: var(--text-main);
+            font-size: 14px;
+        }
+
+        /* 统计数据网格 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-glass);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+            box-shadow: var(--shadow);
+        }
+
+        body.dark-mode .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: bold;
+            color: var(--primary);
+            margin: 10px 0;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+        }
+
+        /* 图表容器 */
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 20px;
+        }
+
+        /* 图表类型选择器 */
+        .chart-type-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+
+        .chart-type-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border-glass);
+            border-radius: 20px;
+            background: var(--bg-glass);
+            color: var(--text-main);
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .chart-type-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        /* 加载状态 */
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            font-size: 16px;
+            color: var(--text-secondary);
+        }
+
+        /* 模态框 */
+        .modal {
+            display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(5px); animation: fadeIn 0.2s ease;
+        }
+        .modal-content {
+            background-color: white; margin: 8% auto; padding: 30px; border-radius: 24px;
+            width: 400px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); position: relative;
+        }
+        body.dark-mode .modal-content { background-color: #262626; color: white; }
+        .close-modal { position: absolute; top: 20px; right: 20px; cursor: pointer; color: #999; font-size: 24px; }
+        
+        .form-group label { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; display: block; }
+        .form-group input {
+            width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #f9fafb; color: var(--text-main); font-size: 14px; margin-bottom: 15px;
+        }
+        body.dark-mode .form-group input { background: #333; border-color: #404040; }
+        .form-group input:focus { border-color: var(--primary); background: white; }
+        body.dark-mode .form-group input:focus { background: #262626; }
+        
+        /* 消息提示 */
+        #message { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 200; }
+        .message { padding: 12px 24px; border-radius: 50px; font-size: 14px; font-weight: 500; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <!-- 顶部统一导航 -->
+    <div class="nav-header">
+        <div class="logo">🔥 Server Monitor</div>
+        <div class="nav-pills">
+            <a class="nav-item" href="/">主机列表</a>
+            <a class="nav-item" href="/monitor_dashboard">数据大屏</a>
+            <a class="nav-item" href="/monitor_management">监控配置</a>
+            <a class="nav-item" href="/alerts">告警管理</a>
+            <a class="nav-item" href="/historical_data">历史数据</a>
+            <a class="nav-item active" href="/statistics">统计分析</a>
+        </div>
+        <div class="action-btns">
+            <button class="theme-btn" onclick="openSettingsModal()" title="壁纸设置">🎨</button>
+            <button class="theme-btn" id="themeToggle" onclick="cycleTheme()" title="切换主题">🌗</button>
+        </div>
+    </div>
+
+    <!-- 主容器 -->
+    <div class="app-container">
+        <h1>数据统计分析</h1>
+
+        <div>
+            <h2>查询条件</h2>
+            <div class="control-panel">
+                <div class="control-group">
+                    <label for="host-select">选择主机</label>
+                    <select id="host-select">
+                        {% for host in hosts %}
+                        <option value="{{ host }}">{{ host }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>选择指标</label>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px;">
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" name="metric-checkbox" value="cpu_usage" checked>
+                            <span>CPU使用率</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" name="metric-checkbox" value="memory_usage" checked>
+                            <span>内存使用率</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" name="metric-checkbox" value="disk_usage">
+                            <span>磁盘使用率</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" name="metric-checkbox" value="network_rx">
+                            <span>网络接收</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                            <input type="checkbox" name="metric-checkbox" value="network_tx">
+                            <span>网络发送</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label for="start-time">开始时间</label>
+                    <input type="datetime-local" id="start-time">
+                </div>
+                <div class="control-group">
+                    <label for="end-time">结束时间</label>
+                    <input type="datetime-local" id="end-time">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap;">
+                <button class="btn-primary" onclick="fetchData()">查询数据</button>
+                
+                <!-- 报表生成控件 -->
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <label for="report-type">报表类型:</label>
+                    <select id="report-type">
+                        <option value="daily">日报</option>
+                        <option value="weekly">周报</option>
+                        <option value="monthly">月报</option>
+                    </select>
+                    <button class="btn-primary" onclick="generateReport()">生成报表</button>
+                    <button class="btn-primary" onclick="exportPDF()">导出PDF</button>
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 30px;">
+            <h2>统计数据</h2>
+            <div id="stats-container" class="stats-grid">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 30px;">
+            <h2>数据可视化</h2>
+            <div class="chart-type-selector">
+                <button class="chart-type-btn active" onclick="changeChartType('line')">折线图</button>
+                <button class="chart-type-btn" onclick="changeChartType('bar')">柱状图</button>
+                <button class="chart-type-btn" onclick="changeChartType('pie')">饼图</button>
+            </div>
+            <div class="chart-container">
+                <div id="stats-chart" style="width: 100%; height: 100%;"></div>
+            </div>
+        </div>
+        
+        <!-- 报表在线查看区域 -->
+        <div style="margin-top: 30px;">
+            <h2>报表在线查看</h2>
+            <div id="report-viewer" style="border: 1px solid var(--border-glass); border-radius: var(--radius); padding: 20px; background: var(--bg-glass);">
+                <div style="text-align: center; color: var(--text-secondary);">
+                    点击"生成报表"按钮查看报表
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 壁纸设置模态框 -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeSettingsModal()">&times;</span>
+            <h2 style="margin: 0 0 20px 0; font-size: 20px;">🎨 个性化设置</h2>
+            <div class="form-group">
+                <label>自定义壁纸 URL</label>
+                <input type="text" id="bg-url-input" placeholder="https://example.com/wallpaper.jpg">
+                <p style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">输入图片直链，推荐使用高清风景图。</p>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button class="btn-primary" style="flex: 1;" onclick="saveWallpaper()">应用壁纸</button>
+                <button class="btn-primary" style="flex: 1; background: transparent; border: 1px solid #ddd; color: var(--text-main);" onclick="resetWallpaper()">恢复默认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let statsChart = null;
+        let currentChartType = 'line';
+        let currentMode = localStorage.getItem('themeMode') || 'auto';
+
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化 ECharts
+            statsChart = echarts.init(document.getElementById('stats-chart'));
+            
+            // 应用保存的主题和壁纸
+            applyTheme();
+            
+            // 加载壁纸
+            const savedBg = localStorage.getItem('customWallpaper');
+            if (savedBg) {
+                document.body.style.backgroundImage = `url('${savedBg}')`;
+            }
+            
+            // 获取统计数据
+            fetchData();
+        });
+
+        // 壁纸设置
+        function openSettingsModal() {
+            document.getElementById('bg-url-input').value = localStorage.getItem('customWallpaper') || '';
+            document.getElementById('settingsModal').style.display = 'block';
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').style.display = 'none';
+        }
+
+        function saveWallpaper() {
+            const url = document.getElementById('bg-url-input').value.trim();
+            if (url) {
+                localStorage.setItem('customWallpaper', url);
+                document.body.style.backgroundImage = `url('${url}')`;
+                showMessage('壁纸设置成功！', true);
+                closeSettingsModal();
+            }
+        }
+
+        function resetWallpaper() {
+            localStorage.removeItem('customWallpaper');
+            document.body.style.backgroundImage = ''; // 回退到 CSS 默认渐变
+            showMessage('已恢复默认背景', true);
+            closeSettingsModal();
+        }
+
+        // 主题切换
+        function applyTheme() {
+            let isDark = false;
+            if (currentMode === 'auto') {
+                const h = new Date().getHours();
+                isDark = (h < 6 || h >= 18);
+                // 自动模式显示特殊图标
+                document.getElementById('themeToggle').textContent = '🌤️';
+            } else if (currentMode === 'dark') {
+                isDark = true;
+                document.getElementById('themeToggle').textContent = '🌙';
+            } else {
+                isDark = false;
+                document.getElementById('themeToggle').textContent = '☀️';
+            }
+            
+            if (isDark) {
+                document.body.classList.add('dark-mode');
+            } else {
+                document.body.classList.remove('dark-mode');
+            }
+            
+            // 重新渲染图表以适配深色/浅色
+            setTimeout(() => {
+                if (statsChart) {
+                    statsChart.resize();
+                    fetchData();
+                }
+            }, 100);
+        }
+
+        function cycleTheme() {
+            const modes = ['auto', 'light', 'dark'];
+            const idx = modes.indexOf(currentMode);
+            currentMode = modes[(idx + 1) % modes.length];
+            localStorage.setItem('themeMode', currentMode);
+            applyTheme();
+        }
+
+        // 消息提示
+        function showMessage(msg, isSuccess) {
+            const div = document.createElement('div');
+            div.className = `message ${isSuccess ? 'success' : 'error'}`;
+            div.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 12px 24px;
+                border-radius: 50px;
+                font-size: 14px;
+                font-weight: 500;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+                background: ${isSuccess ? 'var(--success)' : 'var(--danger)'};
+                color: white;
+                z-index: 200;
+                animation: fadeIn 0.2s ease;
+            `;
+            div.textContent = msg;
+            document.body.appendChild(div);
+            
+            setTimeout(() => {
+                div.remove();
+            }, 3000);
+        }
+
+        // ============ 数据格式化工具函数 ============
+        function formatNumber(value, decimals = 1) {
+            if (isNaN(value) || value === null || value === undefined) {
+                return '0';
+            }
+            return parseFloat(value).toFixed(decimals);
+        }
+
+        function formatPercentage(value, decimals = 1) {
+            if (isNaN(value) || value === null || value === undefined) {
+                return '0%';
+            }
+            return parseFloat(value).toFixed(decimals) + '%';
+        }
+
+        function formatBytes(bytes, decimals = 1) {
+            if (isNaN(bytes) || bytes === null || bytes === undefined || bytes === 0) {
+                return '0 B';
+            }
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // 获取选中的指标
+        function getSelectedMetrics() {
+            const checkboxes = document.querySelectorAll('input[name="metric-checkbox"]:checked');
+            return Array.from(checkboxes).map(checkbox => checkbox.value);
+        }
+
+        // 获取查询参数
+        function getQueryParams() {
+            return {
+                host_ip: document.getElementById('host-select').value,
+                metrics: getSelectedMetrics().join(','),
+                start_time: document.getElementById('start-time').value.replace('T', ' ') || '',
+                end_time: document.getElementById('end-time').value.replace('T', ' ') || ''
+            };
+        }
+
+        // 构建API URL
+        function buildApiUrl(endpoint, params) {
+            const url = new URL(endpoint, window.location.origin);
+            Object.keys(params).forEach(key => {
+                if (params[key]) {
+                    url.searchParams.append(key, params[key]);
+                }
+            });
+            return url.toString();
+        }
+
+        // 获取统计数据
+        async function fetchData() {
+            const params = getQueryParams();
+            
+            try {
+                document.getElementById('stats-container').innerHTML = '<div class="loading">加载中...</div>';
+                
+                const statsUrl = buildApiUrl('/api/statistics', params);
+                const statsResponse = await fetch(statsUrl);
+                const statsData = await statsResponse.json();
+                
+                const chartUrl = buildApiUrl('/api/statistics/chart', params);
+                const chartResponse = await fetch(chartUrl);
+                const chartData = await chartResponse.json();
+                
+                if (statsData.success && chartData.success) {
+                    updateStatsDisplay(statsData);
+                    updateChart(chartData);
+                } else {
+                    throw new Error(statsData.message || chartData.message || '获取数据失败');
+                }
+            } catch (error) {
+                document.getElementById('stats-container').innerHTML = `<div style="color: var(--danger); text-align: center;">${error.message}</div>`;
+                console.error('获取数据失败:', error);
+            }
+        }
+
+        // 更新统计数据展示
+        function updateStatsDisplay(data) {
+            const container = document.getElementById('stats-container');
+            
+            if (data.type === 'single_host') {
+                let html = '';
+                const metrics = Object.keys(data.statistics);
+                
+                metrics.forEach(metric => {
+                    const stats = data.statistics[metric];
+                    const metricName = getMetricName(metric);
+                    
+                    html += `
+                        <div class="stat-card">
+                            <div class="stat-label">${metricName} - 平均值</div>
+                            <div class="stat-value">${formatPercentage(stats.average)}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">${metricName} - 最大值</div>
+                            <div class="stat-value">${formatPercentage(stats.peak)}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">${metricName} - 最小值</div>
+                            <div class="stat-value">${formatPercentage(stats.minimum)}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">${metricName} - 中位数</div>
+                            <div class="stat-value">${formatPercentage(stats.median)}</div>
+                        </div>
+                    `;
+                });
+                
+                container.innerHTML = html;
+            }
+        }
+
+        // 更新图表
+        function updateChart(data) {
+            const chartData = data.chart_data;
+            const isDark = document.body.classList.contains('dark-mode');
+            const textColor = isDark ? '#ccc' : '#666';
+            const splitLineColor = isDark ? '#444' : '#eee';
+            
+            const metrics = Object.keys(chartData.datasets);
+            const colors = ['#6366f1', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
+            
+            // 清除之前的图表配置
+            statsChart.clear();
+            
+            let option = {};
+            
+            // 根据图表类型设置不同的配置
+            if (currentChartType === 'pie') {
+                // 饼图需要特殊处理，使用最新的数据点
+                const pieData = [];
+                metrics.forEach((metric, index) => {
+                    const dataArray = chartData.datasets[metric];
+                    const latestValue = dataArray[dataArray.length - 1] || 0;
+                    pieData.push({
+                        name: getMetricName(metric),
+                        value: latestValue,
+                        itemStyle: { color: colors[index % colors.length] }
+                    });
+                });
+                
+                option = {
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: '{b}: {c}% ({d}%)'
+                    },
+                    legend: {
+                        orient: 'vertical',
+                        left: 'left',
+                        data: metrics.map(metric => getMetricName(metric)),
+                        textStyle: { color: textColor }
+                    },
+                    series: [{
+                        name: '指标占比',
+                        type: 'pie',
+                        radius: '60%',
+                        center: ['60%', '50%'],
+                        data: pieData,
+                        emphasis: {
+                            itemStyle: {
+                                shadowBlur: 10,
+                                shadowOffsetX: 0,
+                                shadowColor: 'rgba(0, 0, 0, 0.5)'
+                            }
+                        },
+                        label: {
+                            show: false, // 饼图默认不显示标签，只在悬停时显示
+                            formatter: '{b}: {c}%',
+                            color: textColor
+                        }
+                    }]
+                };
+            } else {
+                // 折线图和柱状图的通用配置
+                const series = [];
+                metrics.forEach((metric, index) => {
+                    const dataArray = chartData.datasets[metric];
+                    const seriesItem = {
+                        name: getMetricName(metric),
+                        type: currentChartType,
+                        data: dataArray,
+                        smooth: true,
+                        itemStyle: { color: colors[index % colors.length] }
+                    };
+                    
+                    // 根据图表类型添加特定配置
+                    if (currentChartType === 'line') {
+                        seriesItem.areaStyle = { opacity: 0.2 };
+                    } else if (currentChartType === 'bar') {
+                        seriesItem.barWidth = 20;
+                        seriesItem.label = {
+                            show: false, // 柱状图默认不显示标签，只在悬停时显示
+                            position: 'top',
+                            formatter: '{c}%',
+                            color: textColor
+                        };
+                    }
+                    
+                    series.push(seriesItem);
+                });
+                
+                // 获取用户设定的开始和结束时间
+                const startTime = document.getElementById('start-time').value;
+                const endTime = document.getElementById('end-time').value;
+                
+                option = {
+                    grid: { top: 50, bottom: 50, left: 80, right: 20 }, // 增加左内边距，避免图例与y轴重叠
+                    tooltip: {
+                        trigger: 'axis',
+                        formatter: function(params) {
+                            let result = '';
+                            params.forEach(param => {
+                                result += `${param.marker}${param.seriesName}: ${formatPercentage(param.value)}<br/>`;
+                            });
+                            return result;
+                        }
+                    },
+                    title: {
+                        text: `数据范围: ${startTime.replace('T', ' ')} 至 ${endTime.replace('T', ' ')}`,
+                        left: 'center',
+                        textStyle: {
+                            color: textColor,
+                            fontSize: 12,
+                            fontWeight: 'normal'
+                        }
+                    },
+                    legend: {
+                        data: metrics.map(metric => getMetricName(metric)),
+                        top: 20,
+                        left: 0, // 调整图例位置，避免与y轴重叠
+                        textStyle: { color: textColor }
+                    },
+                    xAxis: {
+                        type: 'category',
+                        data: chartData.labels,
+                        axisLabel: { 
+                            color: textColor,
+                            rotate: 45
+                        },
+                        splitLine: { show: false }
+                    },
+                    yAxis: {
+                        type: 'value',
+                        max: 100,
+                        axisLabel: { 
+                            color: textColor,
+                            formatter: '{value}%'
+                        },
+                        splitLine: { 
+                            lineStyle: { 
+                                type: 'dashed', 
+                                color: splitLineColor 
+                            } 
+                        }
+                    },
+                    series: series
+                };
+            }
+            
+            // 更新图表
+            statsChart.setOption(option, true);
+        }
+
+        // 切换图表类型
+        function changeChartType(type) {
+            currentChartType = type;
+            
+            document.querySelectorAll('.chart-type-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // 重新获取数据并更新图表
+            fetchData();
+        }
+
+        // 获取指标名称
+        function getMetricName(metric) {
+            const metricNames = {
+                'cpu_usage': 'CPU使用率',
+                'memory_usage': '内存使用率',
+                'disk_usage': '磁盘使用率',
+                'network_rx': '网络接收',
+                'network_tx': '网络发送'
+            };
+            return metricNames[metric] || metric;
+        }
+
+        // 窗口大小变化时调整图表大小
+        window.onresize = function() {
+            if (statsChart) {
+                statsChart.resize();
+            }
+        };
+
+        // 生成报表
+        function generateReport() {
+            const reportType = document.getElementById('report-type').value;
+            const hostIp = document.getElementById('host-select').value;
+            
+            // 根据报表类型设置时间范围
+            const now = new Date();
+            let startDate, endDate;
+            
+            if (reportType === 'daily') {
+                // 日报：当天
+                startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                endDate = now;
+            } else if (reportType === 'weekly') {
+                // 周报：过去7天
+                startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                endDate = now;
+            } else if (reportType === 'monthly') {
+                // 月报：过去30天
+                startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                endDate = now;
+            }
+            
+            // 格式化时间
+            const formatDateTime = (date) => {
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                const seconds = String(date.getSeconds()).padStart(2, '0');
+                return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+            };
+            
+            // 设置时间输入框
+            document.getElementById('start-time').value = formatDateTime(startDate).replace(' ', 'T');
+            document.getElementById('end-time').value = formatDateTime(endDate).replace(' ', 'T');
+            
+            // 自动查询数据
+            fetchData().then(() => {
+                // 数据加载完成后，生成在线报表
+                generateOnlineReport(reportType, hostIp, startDate, endDate);
+            });
+            
+            showMessage(`${reportType === 'daily' ? '日报' : reportType === 'weekly' ? '周报' : '月报'}生成成功！`, true);
+        }
+        
+        // 生成在线报表
+        function generateOnlineReport(reportType, hostIp, startDate, endDate) {
+            const reportViewer = document.getElementById('report-viewer');
+            const statsContainer = document.getElementById('stats-container');
+            const statCards = statsContainer.querySelectorAll('.stat-card');
+            
+            // 格式化日期
+            const formatDate = (date) => {
+                return date.toLocaleString('zh-CN');
+            };
+            
+            // 生成报表HTML
+            let reportHTML = `
+                <div style="border-bottom: 1px solid var(--border-glass); padding-bottom: 15px; margin-bottom: 20px;">
+                    <h3 style="margin: 0;">${reportType === 'daily' ? '日报' : reportType === 'weekly' ? '周报' : '月报'}</h3>
+                    <div style="color: var(--text-secondary); font-size: 14px;">
+                        <p>主机: ${hostIp}</p>
+                        <p>数据范围: ${formatDate(startDate)} 至 ${formatDate(endDate)}</p>
+                        <p>生成时间: ${formatDate(new Date())}</p>
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <h4>统计数据</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+            `;
+            
+            // 添加统计数据
+            statCards.forEach(card => {
+                const label = card.querySelector('.stat-label').textContent;
+                const value = card.querySelector('.stat-value').textContent;
+                reportHTML += `
+                    <div style="border: 1px solid var(--border-glass); border-radius: 8px; padding: 10px; background: rgba(255, 255, 255, 0.3);">
+                        <div style="color: var(--text-secondary); font-size: 12px;">${label}</div>
+                        <div style="font-size: 18px; font-weight: bold; color: var(--primary);">${value}</div>
+                    </div>
+                `;
+            });
+            
+            reportHTML += `
+                    </div>
+                </div>
+                
+                <div>
+                    <h4>数据图表</h4>
+                    <div style="margin-top: 15px;">图表已在上方数据可视化区域显示</div>
+                </div>
+            `;
+            
+            // 更新报表查看器
+            reportViewer.innerHTML = reportHTML;
+        }
+        
+        // 导出PDF
+        async function exportPDF() {
+            try {
+                // 使用html2canvas和jsPDF结合的方式导出，确保中文显示正常
+                const reportViewer = document.getElementById('report-viewer');
+                const statsContainer = document.getElementById('stats-container');
+                const chartContainer = document.querySelector('.chart-container');
+                
+                // 检查是否有生成的报告
+                let contentToExport = reportViewer;
+                if (reportViewer.innerHTML.includes('点击"生成报表"按钮查看报表')) {
+                    // 如果没有生成报告，使用统计数据和图表
+                    contentToExport = document.createElement('div');
+                    contentToExport.innerHTML = `
+                        <div style="padding: 20px;">
+                            <h1 style="text-align: center; margin-bottom: 20px;">服务器监控统计报告</h1>
+                            <div style="margin-bottom: 20px;">
+                                <p>生成时间: ${new Date().toLocaleString('zh-CN')}</p>
+                                <p>主机: ${document.getElementById('host-select').value}</p>
+                            </div>
+                            <h2>统计数据</h2>
+                            ${statsContainer.innerHTML}
+                            <h2 style="margin-top: 30px;">数据图表</h2>
+                            <div style="margin-top: 20px; text-align: center;">图表已包含在报告中</div>
+                        </div>
+                    `;
+                    document.body.appendChild(contentToExport);
+                }
+                
+                // 使用window.print()作为备选方案，确保中文显示正常
+                // 创建一个打印样式
+                const printStyle = document.createElement('style');
+                printStyle.textContent = `
+                    @media print {
+                        body { background: white; color: black; }
+                        .nav-header, .control-panel, .chart-type-selector { display: none; }
+                        .app-container { box-shadow: none; border: none; }
+                        .stat-card { break-inside: avoid; }
+                    }
+                `;
+                document.head.appendChild(printStyle);
+                
+                // 触发打印
+                window.print();
+                
+                // 清理
+                document.head.removeChild(printStyle);
+                if (contentToExport !== reportViewer) {
+                    document.body.removeChild(contentToExport);
+                }
+                
+                showMessage('PDF导出功能已触发，您可以在打印对话框中选择"另存为PDF"！', true);
+            } catch (error) {
+                console.error('PDF导出失败:', error);
+                showMessage('PDF导出失败，请重试！', false);
+            }
+        }
+        
+        // 点击背景关闭弹窗
+        window.onclick = function(e) {
+            if (e.target.classList.contains('modal')) {
+                e.target.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

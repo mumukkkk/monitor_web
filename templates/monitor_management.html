@@ -4,7 +4,41 @@
     <title>监控管理 - Server Monitor</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // 提前定义关键函数，避免引用错误
+        function openAddCustomMetricModal() {
+            document.getElementById('addCustomMetricModal').style.display = 'block';
+        }
+        
+        function closeAddCustomMetricModal() {
+            document.getElementById('addCustomMetricModal').style.display = 'none';
+            document.getElementById('addCustomMetricForm').reset();
+        }
+        
+        function applyCommandTemplate() {
+            const select = document.getElementById('command-template');
+            const commandInput = document.getElementById('command');
+            if (select.value) {
+                commandInput.value = select.value;
+            }
+        }
+        
+        // 选择命令模板，自动填充指标名称、命令和单位
+        function selectCommandTemplate(command, metricName, unit) {
+            document.getElementById('metric_name').value = metricName;
+            document.getElementById('command').value = command;
+            document.getElementById('unit').value = unit;
+        }
+        
+        // 编辑模式下选择命令模板
+        function selectEditCommandTemplate(command, metricName, unit) {
+            document.getElementById('edit_metric_name').value = metricName;
+            document.getElementById('edit_command').value = command;
+            document.getElementById('edit_unit').value = unit;
+        }
+    </script>
     <style>
         :root {
             /* 样式变量复用 */
@@ -78,6 +112,35 @@
             background: transparent; border: none; cursor: pointer; font-size: 18px; padding: 8px; border-radius: 50%; transition: background 0.2s;
         }
         .theme-btn:hover { background: rgba(0,0,0,0.05); }
+
+        /* 模板按钮样式 */
+        .template-btn {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #374151;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+        .template-btn:hover {
+            background: #f3f4f6;
+            border-color: #d1d5db;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        body.dark-mode .template-btn {
+            background: #404040;
+            border-color: #555;
+            color: white;
+        }
+        body.dark-mode .template-btn:hover {
+            background: #505050;
+            border-color: #666;
+        }
 
         /* 主容器 */
         .app-container {
@@ -254,6 +317,7 @@
             <a class="nav-item active" href="/monitor_management">监控配置</a>
             <a class="nav-item" href="/alerts">告警管理</a>
             <a class="nav-item" href="/historical_data">历史数据</a>
+            <a class="nav-item" href="/statistics">统计分析</a>
         </div>
         <div class="action-btns">
             <button class="theme-btn" onclick="openSettingsModal()" title="壁纸设置">🎨</button>
@@ -275,6 +339,10 @@
                     <span>下次计划: <b id="next-time">-</b></span>
                 </div>
                 <button class="btn btn-primary" id="run-now">⚡ 立即采集</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <span style="font-size: 14px; color: var(--text-secondary);">当前采集项: </span>
+                <span id="monitor-items" style="font-size: 14px; font-weight: 500;">-</span>
             </div>
         </div>
 
@@ -309,6 +377,33 @@
         <div class="card">
             <h3>网络流量趋势 (最近10次)</h3>
             <canvas id="networkChart" height="200"></canvas>
+        </div>
+
+        <!-- 自定义监控指标 -->
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; margin-bottom:20px;">
+                <h3>自定义监控指标</h3>
+                <button class="btn btn-primary" onclick="openAddCustomMetricModal()">+ 添加指标</button>
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>指标名称</th>
+                            <th>描述</th>
+                            <th>命令</th>
+                            <th>单位</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="custom-metrics-list">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: var(--text-secondary);">暂无自定义指标</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- 系统日志 -->
@@ -467,7 +562,7 @@
                 <div class="form-group">
                     <label for="modal-global-interval">采集间隔（秒）</label>
                     <input type="number" id="modal-global-interval" min="10" value="30">
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">建议设置不少于60秒，避免频繁采集</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">当前默认30秒，可根据需要调整</div>
                 </div>
                 <div class="form-group">
                     <label for="modal-global-cleanup-days">数据保留天数</label>
@@ -498,41 +593,469 @@
             </form>
         </div>
     </div>
+    
+    <!-- 添加自定义指标模态框 -->
+    <div class="modal" id="addCustomMetricModal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeAddCustomMetricModal()">&times;</span>
+            <h2>添加自定义监控指标</h2>
+            <form id="addCustomMetricForm">
+                <div class="form-group">
+                    <label for="metric_name">指标名称</label>
+                    <input type="text" id="metric_name" name="metric_name" required placeholder="例如：进程数">
+                </div>
+                <div class="form-group">
+                    <label for="metric_description">描述</label>
+                    <input type="text" id="metric_description" name="metric_description" placeholder="例如：系统当前运行的进程数量">
+                </div>
+                <div class="form-group">
+                    <label for="command">执行命令</label>
+                    <div style="margin-bottom: 15px;">
+                        <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">选择预设模板（推荐）</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                            <button type="button" onclick="selectCommandTemplate('ps aux | wc -l', '进程数量', '个')" class="template-btn">进程数量</button>
+                            <button type="button" onclick="selectCommandTemplate('who | wc -l', '登录用户数', '个')" class="template-btn">登录用户数</button>
+                            <button type="button" onclick="selectCommandTemplate('netstat -tuln | grep LISTEN | wc -l', '监听端口数', '个')" class="template-btn">监听端口数</button>
+                            <button type="button" onclick="selectCommandTemplate('df -h / | awk \'NR==2 {print $5}\' | sed \'s/%//\'', '根目录磁盘使用率', '%')" class="template-btn">根目录磁盘使用率</button>
+                            <button type="button" onclick="selectCommandTemplate('free -m | awk \'NR==2 {print $3/$2 * 100}\'', '内存使用率', '%')" class="template-btn">内存使用率</button>
+                            <button type="button" onclick="selectCommandTemplate('uptime | awk -F\'load average:\' \'{print $2}\' | awk \'{print $1}\'', '系统负载', '')" class="template-btn">系统负载</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/loadavg | awk \'{print $1}\'', '1分钟负载', '')" class="template-btn">1分钟负载</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/loadavg | awk \'{print $2}\'', '5分钟负载', '')" class="template-btn">5分钟负载</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/loadavg | awk \'{print $3}\'', '15分钟负载', '')" class="template-btn">15分钟负载</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/cpuinfo | grep -c processor', 'CPU核心数', '个')" class="template-btn">CPU核心数</button>
+                            <button type="button" onclick="selectCommandTemplate('top -bn1 | grep \'Cpu(s)\'' | awk '{print $2 + $4}', 'CPU使用率', '%')" class="template-btn">CPU使用率</button>
+                            <button type="button" onclick="selectCommandTemplate('ss -tuln | grep LISTEN | wc -l', '监听连接数', '个')" class="template-btn">监听连接数</button>
+                            <button type="button" onclick="selectCommandTemplate('ps aux | grep -c http', 'HTTP进程数', '个')" class="template-btn">HTTP进程数</button>
+                            <button type="button" onclick="selectCommandTemplate('df -h /var | awk \'NR==2 {print $5}\'' | sed 's/%//', 'Var目录磁盘使用率', '%')" class="template-btn">Var目录磁盘使用率</button>
+                            <button type="button" onclick="selectCommandTemplate('free -m | awk \'NR==2 {print $4}\'', '可用内存', 'MB')" class="template-btn">可用内存</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/uptime | awk \'{print $1/86400}\'', '系统运行天数', '天')" class="template-btn">系统运行天数</button>
+                            <button type="button" onclick="selectCommandTemplate('ps aux | grep -c ssh', 'SSH进程数', '个')" class="template-btn">SSH进程数</button>
+                            <button type="button" onclick="selectCommandTemplate('df -h /home | awk \'NR==2 {print $5}\'' | sed 's/%//', 'Home目录磁盘使用率', '%')" class="template-btn">Home目录磁盘使用率</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/meminfo | grep MemTotal | awk \'{print $2/1024}\'', '总内存', 'MB')" class="template-btn">总内存</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/meminfo | grep MemFree | awk \'{print $2/1024}\'', '空闲内存', 'MB')" class="template-btn">空闲内存</button>
+                            <button type="button" onclick="selectCommandTemplate('cat /proc/loadavg | awk \'{print $4}\'', '运行队列长度', '个')" class="template-btn">运行队列长度</button>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">或手动输入命令（高级选项）</div>
+                        <input type="text" id="command" name="command" required placeholder="例如：ps aux | wc -l" style="width: 100%;">
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">选择预设模板可自动填充指标名称和单位，无需手动输入复杂命令</div>
+                </div>
+                <div class="form-group">
+                    <label for="unit">单位</label>
+                    <input type="text" id="unit" name="unit" value="个">
+                </div>
+                <div class="form-group">
+                    <label for="is_active">状态</label>
+                    <select id="is_active" name="is_active">
+                        <option value="1">启用</option>
+                        <option value="0">禁用</option>
+                    </select>
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button type="button" class="btn btn-outline" onclick="closeAddCustomMetricModal()">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
+    <!-- 编辑自定义指标模态框 -->
+    <div class="modal" id="editCustomMetricModal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeEditCustomMetricModal()">&times;</span>
+            <h2>编辑自定义监控指标</h2>
+            <form id="editCustomMetricForm">
+                <input type="hidden" id="edit_metric_id" name="metric_id">
+                <div class="form-group">
+                    <label for="edit_metric_name">指标名称</label>
+                    <input type="text" id="edit_metric_name" name="metric_name" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit_metric_description">描述</label>
+                    <input type="text" id="edit_metric_description" name="metric_description">
+                </div>
+                <div class="form-group">
+                    <label for="edit_command">执行命令</label>
+                    <div style="margin-bottom: 15px;">
+                        <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">选择预设模板（推荐）</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                            <button type="button" onclick="selectEditCommandTemplate('ps aux | wc -l', '进程数量', '个')" class="template-btn">进程数量</button>
+                            <button type="button" onclick="selectEditCommandTemplate('who | wc -l', '登录用户数', '个')" class="template-btn">登录用户数</button>
+                            <button type="button" onclick="selectEditCommandTemplate('netstat -tuln | grep LISTEN | wc -l', '监听端口数', '个')" class="template-btn">监听端口数</button>
+                            <button type="button" onclick="selectEditCommandTemplate('df -h / | awk \'NR==2 {print $5}\'' + ' | sed \'s/%//\'', '根目录磁盘使用率', '%')" class="template-btn">根目录磁盘使用率</button>
+                            <button type="button" onclick="selectEditCommandTemplate('free -m | awk \'NR==2 {print $3/$2 * 100}\'', '内存使用率', '%')" class="template-btn">内存使用率</button>
+                            <button type="button" onclick="selectEditCommandTemplate('uptime | awk -F\'load average:\' \'{print $2}\'' + ' | awk \'{print $1}\'', '系统负载', '')" class="template-btn">系统负载</button>
+                        </div>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">或手动输入命令（高级选项）</div>
+                        <input type="text" id="edit_command" name="command" required style="width: 100%;">
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">选择预设模板可自动填充指标名称和单位</div>
+                </div>
+                <div class="form-group">
+                    <label for="edit_unit">单位</label>
+                    <input type="text" id="edit_unit" name="unit">
+                </div>
+                <div class="form-group">
+                    <label for="edit_is_active">状态</label>
+                    <select id="edit_is_active" name="is_active">
+                        <option value="1">启用</option>
+                        <option value="0">禁用</option>
+                    </select>
+                </div>
+                <div style="margin-top: 20px; text-align: right;">
+                    <button type="button" class="btn btn-outline" onclick="closeEditCustomMetricModal()">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
         // ========== 全局变量 ==========
         let hostMonitorData = {};
         let reportGenerationInProgress = false;
         let exportInProgress = false;
         let networkChart = null;
-
-        // ========== 主题和UI功能 ==========
-        const themeBtn = document.getElementById('themeToggle');
-        let currentMode = localStorage.getItem('themeMode') || 'auto';
+        let customMetrics = [];
         
-        function applyTheme() {
-            let isDark = false;
-            if (currentMode === 'auto') {
-                const h = new Date().getHours();
-                isDark = (h < 6 || h >= 18);
-            } else if (currentMode === 'dark') isDark = true;
+        // ========== 自定义监控指标功能 ==========
+        // 加载自定义指标数据
+        function loadCustomMetrics() {
+            fetch('/api/custom_metrics')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        customMetrics = data.metrics;
+                        renderCustomMetrics();
+                    }
+                })
+                .catch(error => {
+                    console.error('加载自定义指标失败:', error);
+                });
+        }
+        
+        // 渲染自定义指标列表
+        function renderCustomMetrics() {
+            const tbody = document.getElementById('custom-metrics-list');
+            if (customMetrics.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">暂无自定义指标</td></tr>';
+                return;
+            }
             
-            if (isDark) { 
-                document.body.classList.add('dark-mode'); 
-                themeBtn.textContent = '🌙'; 
-            } else { 
-                document.body.classList.remove('dark-mode'); 
-                themeBtn.textContent = '☀️'; 
+            tbody.innerHTML = customMetrics.map(metric => `
+                <tr>
+                    <td>${metric.metric_name}</td>
+                    <td>${metric.metric_description || '-'}</td>
+                    <td style="font-family: monospace; font-size: 12px;">${metric.command}</td>
+                    <td>${metric.unit}</td>
+                    <td>${metric.is_active ? '<span style="color: var(--success)">启用</span>' : '<span style="color: var(--danger)">禁用</span>'}</td>
+                    <td>
+                        <button class="action-btn edit-btn" onclick="editCustomMetric(${metric.id})">编辑</button>
+                        <button class="action-btn delete-btn" onclick="deleteCustomMetric(${metric.id})">删除</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        // 打开添加指标模态框
+        function openAddCustomMetricModal() {
+            document.getElementById('addCustomMetricModal').style.display = 'block';
+        }
+        
+        // 关闭添加指标模态框
+        function closeAddCustomMetricModal() {
+            document.getElementById('addCustomMetricModal').style.display = 'none';
+            document.getElementById('addCustomMetricForm').reset();
+        }
+        
+        // 打开编辑指标模态框
+        function editCustomMetric(metricId) {
+            const metric = customMetrics.find(m => m.id === metricId);
+            if (metric) {
+                document.getElementById('edit_metric_id').value = metric.id;
+                document.getElementById('edit_metric_name').value = metric.metric_name;
+                document.getElementById('edit_metric_description').value = metric.metric_description || '';
+                document.getElementById('edit_command').value = metric.command;
+                document.getElementById('edit_unit').value = metric.unit;
+                document.getElementById('edit_is_active').value = metric.is_active ? 1 : 0;
+                document.getElementById('editCustomMetricModal').style.display = 'block';
             }
         }
         
-        function cycleTheme() {
-            const modes = ['auto', 'light', 'dark'];
-            const idx = modes.indexOf(currentMode);
-            currentMode = modes[(idx + 1) % modes.length];
-            localStorage.setItem('themeMode', currentMode);
-            applyTheme();
+        // 关闭编辑指标模态框
+        function closeEditCustomMetricModal() {
+            document.getElementById('editCustomMetricModal').style.display = 'none';
+            document.getElementById('editCustomMetricForm').reset();
         }
+        
+        // 保存自定义指标
+        function saveCustomMetric() {
+            const form = document.getElementById('addCustomMetricForm');
+            const formData = new FormData(form);
+            
+            fetch('/api/custom_metrics', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(Object.fromEntries(formData))
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    closeAddCustomMetricModal();
+                    loadCustomMetrics();
+                }
+            })
+            .catch(error => {
+                console.error('保存自定义指标失败:', error);
+            });
+        }
+        
+        // 更新自定义指标
+        function updateCustomMetric() {
+            const form = document.getElementById('editCustomMetricForm');
+            const formData = new FormData(form);
+            const metricId = document.getElementById('edit_metric_id').value;
+            
+            fetch(`/api/custom_metrics/${metricId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(Object.fromEntries(formData))
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    closeEditCustomMetricModal();
+                    loadCustomMetrics();
+                }
+            })
+            .catch(error => {
+                console.error('更新自定义指标失败:', error);
+            });
+        }
+        
+        // 删除自定义指标
+        function deleteCustomMetric(metricId) {
+            if (confirm('确定要删除这个自定义指标吗？')) {
+                fetch(`/api/custom_metrics/${metricId}`, {
+                    method: 'DELETE'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        loadCustomMetrics();
+                    }
+                })
+                .catch(error => {
+                    console.error('删除自定义指标失败:', error);
+                });
+            }
+        }
+        
+        // 应用命令模板
+        function applyCommandTemplate() {
+            const templateSelect = document.getElementById('command-template');
+            const commandInput = document.getElementById('command');
+            const metricNameInput = document.getElementById('metric_name');
+            const unitInput = document.getElementById('unit');
+            const descriptionInput = document.getElementById('metric_description');
+            
+            const selectedValue = templateSelect.value;
+            
+            if (selectedValue) {
+                // 模板配置对象，包含所有预设模板的详细信息
+                const templates = {
+                    'ps aux | wc -l': {
+                        name: '进程数量',
+                        unit: '个',
+                        description: '系统当前运行的进程数量'
+                    },
+                    'who | wc -l': {
+                        name: '登录用户数',
+                        unit: '个',
+                        description: '当前登录到系统的用户数量'
+                    },
+                    'netstat -tuln | grep LISTEN | wc -l': {
+                        name: '监听端口数',
+                        unit: '个',
+                        description: '系统当前监听的网络端口数量'
+                    },
+                    "df -h / | awk 'NR==2 {print $5}' | sed 's/%//'": {
+                        name: '根目录磁盘使用率',
+                        unit: '%',
+                        description: '系统根目录的磁盘使用率'
+                    },
+                    "free -m | awk 'NR==2 {print $3/$2 * 100}'": {
+                        name: '内存使用率',
+                        unit: '%',
+                        description: '系统当前内存使用率'
+                    },
+                    "uptime | awk -F'load average:' '{print $2}' | awk '{print $1}'": {
+                        name: '系统负载',
+                        unit: 'load',
+                        description: '系统当前负载平均值'
+                    },
+                    "cat /proc/loadavg | awk '{print $1}'": {
+                        name: '1分钟负载',
+                        unit: 'load',
+                        description: '系统1分钟平均负载'
+                    },
+                    "cat /proc/loadavg | awk '{print $2}'": {
+                        name: '5分钟负载',
+                        unit: 'load',
+                        description: '系统5分钟平均负载'
+                    },
+                    "cat /proc/loadavg | awk '{print $3}'": {
+                        name: '15分钟负载',
+                        unit: 'load',
+                        description: '系统15分钟平均负载'
+                    },
+                    'cat /proc/cpuinfo | grep -c processor': {
+                        name: 'CPU核心数',
+                        unit: '个',
+                        description: '系统CPU核心数量'
+                    },
+                    "top -bn1 | grep 'Cpu(s)' | awk '{print $2 + $4}'": {
+                        name: 'CPU使用率',
+                        unit: '%',
+                        description: '系统当前CPU使用率'
+                    },
+                    'ss -tuln | grep LISTEN | wc -l': {
+                        name: '监听连接数',
+                        unit: '个',
+                        description: '系统当前监听的TCP/UDP连接数量'
+                    },
+                    'ps aux | grep -c http': {
+                        name: 'HTTP进程数',
+                        unit: '个',
+                        description: '系统中运行的HTTP相关进程数量'
+                    },
+                    "df -h /var | awk 'NR==2 {print $5}' | sed 's/%//'": {
+                        name: 'Var目录磁盘使用率',
+                        unit: '%',
+                        description: '系统/var目录的磁盘使用率'
+                    },
+                    "free -m | awk 'NR==2 {print $4}'": {
+                        name: '可用内存',
+                        unit: 'MB',
+                        description: '系统当前可用内存大小'
+                    },
+                    "cat /proc/uptime | awk '{print $1/86400}'": {
+                        name: '系统运行天数',
+                        unit: '天',
+                        description: '系统连续运行的天数'
+                    },
+                    'ps aux | grep -c ssh': {
+                        name: 'SSH进程数',
+                        unit: '个',
+                        description: '系统中运行的SSH相关进程数量'
+                    },
+                    "df -h /home | awk 'NR==2 {print $5}' | sed 's/%//'": {
+                        name: 'Home目录磁盘使用率',
+                        unit: '%',
+                        description: '系统/home目录的磁盘使用率'
+                    },
+                    "cat /proc/meminfo | grep MemTotal | awk '{print $2/1024}'": {
+                        name: '总内存',
+                        unit: 'MB',
+                        description: '系统总内存大小'
+                    },
+                    "cat /proc/meminfo | grep MemFree | awk '{print $2/1024}'": {
+                        name: '空闲内存',
+                        unit: 'MB',
+                        description: '系统当前空闲内存大小'
+                    },
+                    "cat /proc/loadavg | awk '{print $4}'": {
+                        name: '运行队列长度',
+                        unit: '个',
+                        description: '系统当前运行队列的进程数量'
+                    }
+                };
+                
+                // 获取选中模板的配置
+                const template = templates[selectedValue];
+                if (template) {
+                    // 自动填充表单字段
+                    metricNameInput.value = template.name;
+                    unitInput.value = template.unit;
+                    descriptionInput.value = template.description;
+                }
+                
+                // 设置命令输入框
+                commandInput.value = selectedValue;
+            }
+        }
+        
+        // 表单提交事件监听
+        document.getElementById('addCustomMetricForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            saveCustomMetric();
+        });
+        
+        document.getElementById('editCustomMetricForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            updateCustomMetric();
+        });
+        
+        // 全局配置表单提交事件监听
+        document.getElementById('global-config-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            saveGlobalConfig();
+        });
+        
+        // 保存全局配置
+        function saveGlobalConfig() {
+            const interval = parseInt(document.getElementById('modal-global-interval').value);
+            const cleanupDays = parseInt(document.getElementById('modal-global-cleanup-days').value);
+            
+            // 获取勾选的监控项
+            const monitorCpu = document.getElementById('modal-global-cpu').checked;
+            const monitorMemory = document.getElementById('modal-global-memory').checked;
+            const monitorDisk = document.getElementById('modal-global-disk').checked;
+            const monitorNetwork = document.getElementById('modal-global-network').checked;
+            
+            // 构建配置数据
+            const configData = {
+                interval: interval,
+                cleanup_days: cleanupDays,
+                monitor_cpu: monitorCpu,
+                monitor_memory: monitorMemory,
+                monitor_disk: monitorDisk,
+                monitor_network: monitorNetwork
+            };
+            
+            // 发送请求保存配置
+            fetch('/save_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(configData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('配置保存成功！');
+                    closeGlobalConfigModal();
+                    // 刷新监控数据
+                    fetchMonitorData();
+                } else {
+                    alert('配置保存失败：' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('保存配置失败：', error);
+                alert('配置保存失败，请检查控制台日志');
+            });
+        }
+
 
         // ========== 壁纸功能 ==========
         function openSettingsModal() { 
@@ -556,6 +1079,67 @@
             document.body.style.backgroundImage = '';
             closeSettingsModal();
         }
+
+        // ========== 主题功能 ==========
+        const themeBtn = document.getElementById('themeToggle');
+        let currentMode = localStorage.getItem('themeMode') || 'auto';
+
+        function applyTheme() {
+            let isDark = false;
+            if (currentMode === 'auto') {
+                const h = new Date().getHours();
+                isDark = (h < 6 || h >= 18);
+                themeBtn.textContent = '🌤️'; // 自动模式显示特殊图标
+            } else if (currentMode === 'dark') {
+                isDark = true;
+                themeBtn.textContent = '🌙';
+            } else {
+                isDark = false;
+                themeBtn.textContent = '☀️';
+            }
+            
+            if (isDark) {
+                document.body.classList.add('dark-mode');
+            } else {
+                document.body.classList.remove('dark-mode');
+            }
+        }
+
+        function cycleTheme() {
+            const modes = ['auto', 'light', 'dark'];
+            const idx = modes.indexOf(currentMode);
+            currentMode = modes[(idx + 1) % modes.length];
+            localStorage.setItem('themeMode', currentMode);
+            applyTheme();
+        }
+
+        // ========== 初始化页面 ==========
+        document.addEventListener('DOMContentLoaded', function() {
+            // 应用保存的主题
+            applyTheme();
+            
+            // 加载保存的壁纸
+            const savedBg = localStorage.getItem('customWallpaper');
+            if (savedBg) {
+                document.body.style.backgroundImage = `url('${savedBg}')`;
+            }
+            
+            // 加载自定义指标数据
+            loadCustomMetrics();
+            
+            // 加载监控数据
+            fetchMonitorData();
+            
+            // 初始化网络流量图表
+            initializeNetworkChart();
+            
+            // 添加事件监听器
+            document.getElementById('time-range').addEventListener('change', updateTimeRangeDisplay);
+            document.getElementById('report-time-range').addEventListener('change', updateReportTimeRangeDisplay);
+            document.getElementById('export-data').addEventListener('click', openExportModal);
+            document.getElementById('export-report').addEventListener('click', openReportModal);
+            document.getElementById('run-now').addEventListener('click', runNow);
+        });
 
         // ========== 数据获取和渲染 ==========
         function fetchMonitorData() {
@@ -594,6 +1178,14 @@
             }
             document.getElementById('last-time').textContent = status.last_collection_time || '-';
             document.getElementById('next-time').textContent = status.next_collection_time || '-';
+            
+            // 更新监控项显示
+            const monitorItems = document.getElementById('monitor-items');
+            if (status.monitor_items && status.monitor_items.length > 0) {
+                monitorItems.textContent = status.monitor_items.join('、');
+            } else {
+                monitorItems.textContent = '无';
+            }
         }
 
         function renderHosts(hosts) {
@@ -710,6 +1302,256 @@
             if(confirm('确定清空日志？')) {
                 fetch('/clear_logs', {method:'POST'}).then(()=>fetchMonitorData());
             }
+        }
+        
+        // ========== 报告生成功能 ==========
+        function openReportModal() {
+            setDefaultReportDates();
+            fetchHostsForReport();
+            document.getElementById('report-modal').style.display = 'block';
+        }
+        
+        function closeReportModal() {
+            document.getElementById('report-modal').style.display = 'none';
+        }
+        
+        function setDefaultReportDates() {
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - 7);
+            
+            document.getElementById('report-start-date').value = startDate.toISOString().split('T')[0];
+            document.getElementById('report-end-date').value = endDate.toISOString().split('T')[0];
+        }
+        
+        function fetchHostsForReport() {
+            const select = document.getElementById('report-host-filter');
+            select.innerHTML = '<option value="">所有主机</option>';
+            
+            Object.values(hostMonitorData).forEach(host => {
+                if (host.ip) {
+                    const option = document.createElement('option');
+                    option.value = host.ip;
+                    option.textContent = `${host.ip} (${host.user || '未知用户'})`;
+                    select.appendChild(option);
+                }
+            });
+        }
+        
+        function updateReportTimeRangeDisplay() {
+            const timeRangeSelect = document.getElementById('report-time-range');
+            const customTimeRange = document.getElementById('report-custom-time-range');
+            const startDateInput = document.getElementById('report-start-date');
+            const endDateInput = document.getElementById('report-end-date');
+            
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            const monthAgo = new Date(today);
+            monthAgo.setDate(monthAgo.getDate() - 30);
+            
+            switch(timeRangeSelect.value) {
+                case 'today':
+                    startDateInput.value = today.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'yesterday':
+                    startDateInput.value = yesterday.toISOString().split('T')[0];
+                    endDateInput.value = yesterday.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'week':
+                    startDateInput.value = weekAgo.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'month':
+                    startDateInput.value = monthAgo.toISOString().split('T')[0];
+                    endDateInput.value = today.toISOString().split('T')[0];
+                    customTimeRange.style.display = 'none';
+                    break;
+                case 'custom':
+                    customTimeRange.style.display = 'block';
+                    break;
+            }
+        }
+        
+        function generateReport() {
+            if (reportGenerationInProgress) return;
+            
+            const timeRange = document.getElementById('report-time-range').value;
+            let startDate = '', endDate = '';
+            
+            if (timeRange === 'custom') {
+                startDate = document.getElementById('report-start-date').value;
+                endDate = document.getElementById('report-end-date').value;
+                if (!startDate || !endDate) {
+                    alert('请选择开始日期和结束日期');
+                    return;
+                }
+            } else {
+                const now = new Date();
+                switch (timeRange) {
+                    case 'today':
+                        startDate = now.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'yesterday':
+                        const yesterday = new Date(now);
+                        yesterday.setDate(yesterday.getDate() - 1);
+                        startDate = yesterday.toISOString().split('T')[0];
+                        endDate = startDate;
+                        break;
+                    case 'week':
+                        const weekAgo = new Date(now);
+                        weekAgo.setDate(weekAgo.getDate() - 7);
+                        startDate = weekAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                    case 'month':
+                        const monthAgo = new Date(now);
+                        monthAgo.setDate(monthAgo.getDate() - 30);
+                        startDate = monthAgo.toISOString().split('T')[0];
+                        endDate = now.toISOString().split('T')[0];
+                        break;
+                }
+            }
+            
+            const hostFilter = document.getElementById('report-host-filter').value;
+            const reportTitle = document.getElementById('report-title').value || '服务器监控报告';
+            
+            reportGenerationInProgress = true;
+            const confirmBtn = document.querySelector('#report-modal .btn-primary');
+            const originalText = confirmBtn.innerHTML;
+            confirmBtn.innerHTML = '生成中...';
+            confirmBtn.disabled = true;
+            
+            document.getElementById('report-progress').style.display = 'block';
+            
+            // 实际生成报告 - 调用后端API
+            fetch('/api/generate_report', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    start_date: startDate,
+                    end_date: endDate,
+                    host_filter: hostFilter,
+                    report_title: reportTitle,
+                    report_type: timeRange
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // 模拟报告生成进度
+                    let progress = 0;
+                    const progressInterval = setInterval(() => {
+                        progress += 10;
+                        if (progress > 100) progress = 100;
+                        
+                        document.getElementById('report-progress-bar').style.width = `${progress}%`;
+                        document.getElementById('report-progress-text').textContent = `${progress}%`;
+                        
+                        if (progress === 100) {
+                            clearInterval(progressInterval);
+                            setTimeout(() => {
+                                confirmBtn.innerHTML = originalText;
+                                confirmBtn.disabled = false;
+                                reportGenerationInProgress = false;
+                                closeReportModal();
+                                
+                                // 提供下载链接
+                                if (data.report_url) {
+                                    const a = document.createElement('a');
+                                    a.href = data.report_url;
+                                    a.download = data.report_filename;
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    document.body.removeChild(a);
+                                    alert('报告生成完成并开始下载！');
+                                } else {
+                                    alert('报告生成完成！');
+                                }
+                            }, 500);
+                        }
+                    }, 300);
+                } else {
+                    throw new Error(data.message || '报告生成失败');
+                }
+            })
+            .catch(error => {
+                console.error('报告生成失败:', error);
+                confirmBtn.innerHTML = originalText;
+                confirmBtn.disabled = false;
+                reportGenerationInProgress = false;
+                alert('报告生成失败: ' + error.message);
+            });
+        }
+        
+        // ========== 立即运行采集功能 ==========
+        function runNow() {
+            const btn = document.getElementById('run-now');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '采集ing...';
+            btn.disabled = true;
+            
+            fetch('/api/run_now', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    fetchMonitorData();
+                }
+            })
+            .catch(error => {
+                console.error('立即采集失败:', error);
+            })
+            .finally(() => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            });
+        }
+        
+        // ========== 全局配置功能 ==========
+        function openGlobalConfigModal() {
+            // 获取当前的监控配置
+            fetch('/api/get_config')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // 更新表单控件
+                    document.getElementById('modal-global-interval').value = data.config.interval || 30;
+                    document.getElementById('modal-global-cleanup-days').value = data.config.cleanup_days || 30;
+                    
+                    // 更新监控项勾选状态
+                    document.getElementById('modal-global-cpu').checked = data.config.monitor_cpu !== false;
+                    document.getElementById('modal-global-memory').checked = data.config.monitor_memory !== false;
+                    document.getElementById('modal-global-disk').checked = data.config.monitor_disk !== false;
+                    document.getElementById('modal-global-network').checked = data.config.monitor_network !== false;
+                }
+            })
+            .catch(error => {
+                console.error('获取配置失败:', error);
+            })
+            .finally(() => {
+                // 显示模态框
+                document.getElementById('global-config-modal').style.display = 'block';
+            });
+        }
+        
+        function closeGlobalConfigModal() {
+            document.getElementById('global-config-modal').style.display = 'none';
         }
 
         // ========== 网络流量图表 ==========
@@ -880,7 +1722,7 @@
             const timeRange = document.getElementById('time-range').value;
             let startDate = '', endDate = '';
             
-            // 根据时间范围设置日期（您的代码这部分是正确的）
+            // 根据时间范围设置日期
             if (timeRange === 'custom') {
                 startDate = document.getElementById('export-start-date').value;
                 endDate = document.getElementById('export-end-date').value;
@@ -889,7 +1731,7 @@
                     return;
                 }
             } else {
-                // 预设时间范围逻辑（保持不变）
+                // 预设时间范围逻辑
                 const now = new Date();
                 switch (timeRange) {
                     case 'today':
@@ -925,7 +1767,7 @@
             confirmBtn.innerHTML = '导出中...';
             confirmBtn.disabled = true;
             
-            // 修复：使用正确的后端API端点
+            // 使用正确的后端API端点
             const apiUrl = exportType === 'excel' ? '/api/export/excel' : '/api/export/csv';
             
             // 构建查询参数
@@ -941,503 +1783,55 @@
             // 添加调试信息
             console.log(`导出请求: ${apiUrl}?${params.toString()}`);
             
-            let fetchResponse;
-
             // 正确的API调用（GET请求）
             fetch(`${apiUrl}?${params.toString()}`)
                 .then(response => {
-                    fetchResponse = response;
-                    console.log(`响应状态: ${response.status}, 响应类型: ${response.headers.get('content-type')}`);
-                    
-                    // 检查响应状态码
                     if (!response.ok) {
-                        // 如果是4xx或5xx错误，尝试读取错误信息
-                        if (response.status >= 400) {
-                            return response.text().then(errorText => {
-                                console.error('错误响应内容:', errorText);
-                                // 尝试解析JSON错误
-                                try {
-                                    const errorData = JSON.parse(errorText);
-                                    throw new Error(errorData.message || `导出失败: ${response.status}`);
-                                } catch (e) {
-                                    // 如果不是JSON，使用原始错误文本
-                                    throw new Error(`导出失败: ${response.status} - ${errorText.substring(0, 100)}`);
-                                }
-                            });
-                        }
-                        throw new Error(`HTTP错误! 状态码: ${response.status}`);
+                        throw new Error(`导出失败: ${response.status}`);
                     }
-                    
-                    // 检查响应类型
-                    const contentType = response.headers.get('content-type') || '';
-
-                    // 如果是JSON响应，说明是错误
-                    if (contentType.includes('application/json')) {
-                        return response.json().then(data => {
-                            if (data.success === false) {
-                                throw new Error(data.message || '导出失败');
-                            }
-                            throw new Error('意外的JSON响应格式');
-                        });
-                    }
-
-                    // 如果是Excel文件，正常处理
-                    if (contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') || 
-                        contentType.includes('application/octet-stream')) {
-                        return response.blob();
-                    }
-
-                    // 如果是CSV文件，正常处理
-                    if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
-                        return response.blob();
-                    }
-
-                    // 未知的响应类型
-                    throw new Error(`未知的响应类型: ${contentType}`);
-
+                    return response.blob();
                 })
                 .then(blob => {
-                    if (!blob) return;
-                    
-                    console.log(`下载文件大小: ${blob.size} bytes`);
-                    
-                    // 创建下载链接
+                    // 导出成功，创建下载链接
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
-                    a.style.display = 'none';
                     a.href = url;
                     
-                    // 从响应头获取文件名
-                    const contentDisposition = fetchResponse.headers.get('Content-Disposition');
-                    let filename = `监控数据_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
-
-                    if (contentDisposition) {
-                        const filenameMatch = contentDisposition.match(/filename\\*=UTF-8''(.+)/);
-                        if (filenameMatch) {
-                            filename = decodeURIComponent(filenameMatch[1]);
-                        } else {
-                            const simpleMatch = contentDisposition.match(/filename=\"(.+)\"/);
-                            if (simpleMatch) {
-                                filename = simpleMatch[1];
-                            }
-                        }
-                    } else {
-                        // 默认文件名
-                        if (exportType === 'excel') {
-                            filename += '.xlsx';
-                        } else {
-                            filename += '.csv';
-                        }
-                    }
-
-                    
+                    // 设置文件名
+                    const filename = exportType === 'excel' ? 
+                        `monitor_data_${startDate}_to_${endDate}.xlsx` : 
+                        `monitor_data_${startDate}_to_${endDate}.csv`;
                     a.download = filename;
+                    
+                    // 触发下载
                     document.body.appendChild(a);
                     a.click();
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
+                    
+                    // 清理
+                    setTimeout(() => {
+                        window.URL.revokeObjectURL(url);
+                        document.body.removeChild(a);
+                    }, 100);
                     
                     // 恢复按钮状态
-                    exportInProgress = false;
                     confirmBtn.innerHTML = originalText;
                     confirmBtn.disabled = false;
+                    exportInProgress = false;
+                    
+                    // 关闭模态框
                     closeExportModal();
-                    
-                    // 显示成功消息
-                    showNotification('导出成功！文件已开始下载', 'success');
                 })
                 .catch(error => {
-                    console.error('导出失败详情:', error);
-                    exportInProgress = false;
+                    // 处理错误
+                    console.error('导出失败:', error);
+                    alert(`导出失败: ${error.message}`);
+                    
+                    // 恢复按钮状态
                     confirmBtn.innerHTML = originalText;
                     confirmBtn.disabled = false;
-                    
-                    // 显示错误消息
-                    showNotification(`导出失败: ${error.message}`, 'error');
+                    exportInProgress = false;
                 });
         }
-
-        // ========== 通知功能 ==========
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 12px 20px;
-                border-radius: 8px;
-                color: white;
-                font-weight: 500;
-                z-index: 1000;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                transition: all 0.3s ease;
-                max-width: 300px;
-            `;
-            
-            if (type === 'success') {
-                notification.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-            } else if (type === 'error') {
-                notification.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
-            } else {
-                notification.style.background = 'linear-gradient(135deg, #6366f1, #4f46e5)';
-            }
-            
-            notification.textContent = message;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.style.transform = 'translateX(100%)';
-                notification.style.opacity = '0';
-                setTimeout(() => {
-                    document.body.removeChild(notification);
-                }, 300);
-            }, 3000);
-        }
-
-
-
-        // ========== 报告生成功能 ==========
-        function openReportModal() {
-            setReportDefaultDates();
-            loadHostsForReport();
-            document.getElementById('report-modal').style.display = 'block';
-        }
-
-        function closeReportModal() {
-            document.getElementById('report-modal').style.display = 'none';
-            resetReportGeneration();
-        }
-
-        function setReportDefaultDates() {
-            const endDate = new Date();
-            const startDate = new Date();
-            startDate.setDate(startDate.getDate() - 7);
-            
-            document.getElementById('report-start-date').value = startDate.toISOString().split('T')[0];
-            document.getElementById('report-end-date').value = endDate.toISOString().split('T')[0];
-        }
-
-        function loadHostsForReport() {
-            const select = document.getElementById('report-host-filter');
-            select.innerHTML = '<option value="">所有主机</option>';
-            
-            Object.values(hostMonitorData).forEach(host => {
-                if (host.ip) {
-                    const option = document.createElement('option');
-                    option.value = host.ip;
-                    option.textContent = `${host.ip} (${host.user || '未知用户'})`;
-                    select.appendChild(option);
-                }
-            });
-        }
-
-
-        function generateReport() {
-            if (reportGenerationInProgress) return;
-            
-            // 收集报告参数
-            const reportData = collectReportData();
-            if (!reportData) return;
-            
-            reportGenerationInProgress = true;
-            const generateBtn = document.querySelector('#report-modal .btn-primary');
-            const originalText = generateBtn.innerHTML;
-            generateBtn.innerHTML = '生成中...';
-            generateBtn.disabled = true;
-            
-            document.getElementById('report-progress').style.display = 'block';
-            updateReportProgress(10, '正在准备报告数据...');
-            
-            console.log('开始生成报告，参数:', reportData);
-            
-            // 调用后端API生成报告
-            generateReportWithAPI(reportData)
-                .then(response => {
-                    console.log('报告生成响应:', response);
-                    
-                    if (response.success) {
-                        updateReportProgress(100, '报告生成成功！');
-                        setTimeout(() => {
-                            handleReportDownload(response);
-                            reportGenerationInProgress = false;
-                            generateBtn.innerHTML = originalText;
-                            generateBtn.disabled = false;
-                            closeReportModal();
-                            showNotification('报告生成成功！', 'success');
-                        }, 1000);
-                    } else {
-                        throw new Error(response.message || '报告生成失败');
-                    }
-                })
-                .catch(error => {
-                    console.error('报告生成失败详情:', error);
-                    reportGenerationInProgress = false;
-                    generateBtn.innerHTML = originalText;
-                    generateBtn.disabled = false;
-                    
-                    // 提供更详细的错误信息
-                    let errorMessage = error.message;
-                    if (error.message.includes('Unexpected token')) {
-                        errorMessage = '后端返回了HTML内容而不是JSON，请检查API实现';
-                    }
-                    
-                    showNotification(`报告生成失败: ${errorMessage}`, 'error');
-                });
-        }
-
-        function collectReportData() {
-            const selectedHost = document.getElementById('report-host-filter').value;
-            const host_ips = selectedHost ? [selectedHost] : [];
-            let startDate = '', endDate = '';
-            
-
-            const timeRange = document.getElementById('report-time-range').value;
-            if (timeRange === 'custom') {
-                startDate = document.getElementById('report-start-date').value;
-                endDate = document.getElementById('report-end-date').value;
-                if (!startDate || !endDate) {
-                    showNotification('请选择开始日期和结束日期', 'error');
-                    return null;
-                }
-            } else {
-                const now = new Date();
-                switch (timeRange) {
-                    case 'today':
-                        startDate = now.toISOString().split('T')[0];
-                        endDate = startDate;
-                        break;
-                    case 'yesterday':
-                        const yesterday = new Date(now);
-                        yesterday.setDate(yesterday.getDate() - 1);
-                        startDate = yesterday.toISOString().split('T')[0];
-                        endDate = startDate;
-                        break;
-                    case 'week':
-                        const weekAgo = new Date(now);
-                        weekAgo.setDate(weekAgo.getDate() - 7);
-                        startDate = weekAgo.toISOString().split('T')[0];
-                        endDate = now.toISOString().split('T')[0];
-                        break;
-                    case 'month':
-                        const monthAgo = new Date(now);
-                        monthAgo.setDate(monthAgo.getDate() - 30);
-                        startDate = monthAgo.toISOString().split('T')[0];
-                        endDate = now.toISOString().split('T')[0];
-                        break;
-                }
-            }
-            
-            // 只获取第一个选中的主机（后端限制）
-            const selectedHosts = Array.from(document.querySelectorAll('#host-selection-list input[type="checkbox"]:checked'))
-                .map(checkbox => checkbox.value)
-                .filter(ip => ip !== '');
-            
-            // 获取报告标题
-            const reportTitle = document.getElementById('report-title').value || '服务器监控报告';
-            
-            return {
-                start_date: startDate,
-                end_date: endDate,
-                host_ips: selectedHosts,
-                title: reportTitle
-            };
-        }
-
-        function generateReportWithAPI(reportData) {
-            return new Promise((resolve, reject) => {
-                // 构建查询参数
-                const params = new URLSearchParams({
-                    start_date: reportData.start_date,
-                    end_date: reportData.end_date,
-                    title: reportData.title,
-                    type: 'html',
-                    template: 'summary'
-                });
-                
-                // 只发送第一个选中的主机IP（后端只支持单个主机）
-                if (reportData.host_ips.length > 0) {
-                    params.append('host_ip', reportData.host_ips[0]);
-                }
-                
-                fetch(`/api/export/report?${params.toString()}`)
-                    .then(response => {
-                        console.log('报告API响应状态:', response.status);
-                        console.log('响应类型:', response.headers.get('content-type'));
-                        
-                        if (!response.ok) {
-                            throw new Error(`HTTP错误! 状态码: ${response.status}`);
-                        }
-                        
-                        // 检查响应类型
-                        const contentType = response.headers.get('content-type') || '';
-                        
-                        if (contentType.includes('application/json')) {
-                            // 如果是JSON响应，说明是错误信息
-                            return response.json().then(data => {
-                                if (data.success === false) {
-                                    throw new Error(data.message || '报告生成失败');
-                                }
-                                resolve(data);
-                            });
-                        } else if (contentType.includes('text/html')) {
-                            // 如果是HTML响应，说明是报告内容
-                            return response.text().then(htmlContent => {
-                                resolve({
-                                    success: true,
-                                    report_content: htmlContent,
-                                    message: '报告生成成功'
-                                });
-                            });
-                        } else {
-                            // 未知的响应类型
-                            throw new Error(`未知的响应类型: ${contentType}`);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('报告API调用失败:', error);
-                        reject(error);
-                    });
-            });
-        }
-
-
-        function handleReportDownload(response) {
-            if (response.report_content) {
-                // 创建HTML报告下载
-                const blob = new Blob([response.report_content], { type: 'text/html; charset=utf-8' });
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.style.display = 'none';
-                a.href = url;
-                a.download = `监控报告_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.html`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                
-                // 可选：在新标签页打开预览
-                setTimeout(() => {
-                    const previewWindow = window.open('', '_blank');
-                    previewWindow.document.write(response.report_content);
-                    previewWindow.document.close();
-                }, 500);
-            } else if (response.report_url) {
-                // 如果后端返回报告URL，直接打开
-                window.open(response.report_url, '_blank');
-            } else {
-                console.error('报告响应格式错误:', response);
-                showNotification('报告格式错误，请联系管理员', 'error');
-            }
-        }
-
-
-
-        function simulateReportProgress() {
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                if (progress < 90) {
-                    progress += 10;
-                    updateReportProgress(progress, `正在生成报告... ${progress}%`);
-                } else {
-                    clearInterval(progressInterval);
-                }
-            }, 300);
-        }
-
-        function updateReportProgress(percent, status) {
-            document.getElementById('report-progress-bar').style.width = percent + '%';
-            document.getElementById('report-progress-text').textContent = percent + '%';
-            document.getElementById('report-status').textContent = status;
-        }
-
-        function resetReportGeneration() {
-            reportGenerationInProgress = false;
-            document.getElementById('report-progress').style.display = 'none';
-        }
-
-        // ========== 全局配置功能 ==========
-        function openGlobalConfigModal() {
-            document.getElementById('global-config-modal').style.display = 'block';
-        }
-
-        function closeGlobalConfigModal() {
-            document.getElementById('global-config-modal').style.display = 'none';
-        }
-
-        // ========== 事件监听器 ==========
-        document.addEventListener('DOMContentLoaded', function() {
-           
-            
-            // 立即采集按钮
-            document.getElementById('run-now').addEventListener('click', function() {
-                this.textContent = '🚀 正在执行...';
-                this.disabled = true;
-                fetch('/trigger_collection', { method: 'POST' })
-                    .then(r => r.json())
-                    .then(res => {
-                        setTimeout(() => {
-                            this.textContent = '⚡ 立即采集';
-                            this.disabled = false;
-                            fetchMonitorData();
-                        }, 2000);
-                    });
-            });
-
-            // 导出数据按钮
-            document.getElementById('export-data').addEventListener('click', openExportModal);
-
-            // 生成报告按钮
-            document.getElementById('export-report').addEventListener('click', openReportModal);
-
-            // 时间范围选择事件
-            document.getElementById('time-range').addEventListener('change', function() {
-                document.getElementById('custom-time-range').style.display = 
-                    this.value === 'custom' ? 'block' : 'none';
-                // 新增：更新时间范围显示
-                updateTimeRangeDisplay();
-            });
-
-            document.getElementById('report-time-range').addEventListener('change', function() {
-                document.getElementById('report-custom-time-range').style.display = 
-                    this.value === 'custom' ? 'block' : 'none';
-                // 新增：更新时间范围显示
-                updateTimeRangeDisplay();
-            });
-
-            
-
-            // 全局配置表单
-            document.getElementById('global-config-form').addEventListener('submit', function(e) {
-                e.preventDefault();
-                alert('配置保存功能开发中...');
-                closeGlobalConfigModal();
-            });
-
-            // 新增：日期输入变化监听
-            document.getElementById('export-start-date').addEventListener('change', updateTimeRangeDisplay);
-            document.getElementById('export-end-date').addEventListener('change', updateTimeRangeDisplay);
-            document.getElementById('report-start-date').addEventListener('change', updateTimeRangeDisplay);
-            document.getElementById('report-end-date').addEventListener('change', updateTimeRangeDisplay);
-
-            // 初始化
-            applyTheme();
-            const savedBg = localStorage.getItem('customWallpaper');
-            if (savedBg) document.body.style.backgroundImage = `url('${savedBg}')`;
-            
-            fetchMonitorData();
-            initializeNetworkChart();
-            
-            // 定时刷新
-            setInterval(fetchMonitorData, 10000);
-            setInterval(applyTheme, 60000);
-        });
-
-        // 点击模态框外部关闭
-        window.addEventListener('click', function(e) {
-            if (e.target.classList.contains('modal')) {
-                e.target.style.display = 'none';
-            }
-        });
     </script>
 </body>
 </html>

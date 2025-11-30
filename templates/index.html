@@ -30,6 +30,7 @@
             --bg-glass: rgba(30, 30, 30, 0.8);
             --border-glass: rgba(255, 255, 255, 0.1);
             --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --wallpaper: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
         }
 
         * { box-sizing: border-box; outline: none; }
@@ -237,6 +238,7 @@
             <a class="nav-item" href="/monitor_management">监控配置</a>
             <a class="nav-item" href="/alerts">告警管理</a>
             <a class="nav-item" href="/historical_data">历史数据</a>
+            <a class="nav-item" href="/statistics">统计分析</a>
         </div>
         <div class="action-btns">
             <button class="theme-btn" onclick="openSettingsModal()" title="壁纸设置">🎨</button>
@@ -535,14 +537,19 @@
             if (currentMode === 'auto') {
                 const h = new Date().getHours();
                 isDark = (h < 6 || h >= 18);
-            } else if (currentMode === 'dark') isDark = true;
+                if(themeBtn) themeBtn.textContent = '🌤️'; // 自动模式显示特殊图标
+            } else if (currentMode === 'dark') {
+                isDark = true;
+                if(themeBtn) themeBtn.textContent = '🌙';
+            } else {
+                isDark = false;
+                if(themeBtn) themeBtn.textContent = '☀️';
+            }
             
             if (isDark) {
                 document.body.classList.add('dark-mode');
-                if(themeBtn) themeBtn.textContent = '🌙';
             } else {
                 document.body.classList.remove('dark-mode');
-                if(themeBtn) themeBtn.textContent = '☀️';
             }
         }
 

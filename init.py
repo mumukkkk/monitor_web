@@ -1,4 +1,4 @@
-from  flask import Flask, render_template, request, jsonify,send_file,make_response
+from  flask import Flask, render_template, request, jsonify,send_file,make_response,send_from_directory
 import base64
 import sqlite3
 import os
@@ -16,6 +16,8 @@ shanghai_tz = pytz.timezone('Asia/Shanghai')
 
 # 导入密码解密模块
 from privacy import decrypt_password
+# 导入数据库工具类
+from database_utils import DatabaseUtils
 
 app = Flask(__name__)
 
@@ -120,6 +122,48 @@ def init_db():
             resolved_at TIMESTAMP,
             FOREIGN KEY (rule_id) REFERENCES alert_rules (id)
         )
+    ''')
+    
+    # 创建自定义监控指标配置表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS custom_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_name TEXT NOT NULL,
+            metric_description TEXT,
+            command TEXT NOT NULL,
+            unit TEXT DEFAULT '%',
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # 创建自定义监控指标数据表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS custom_metric_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            metric_id INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            value REAL NOT NULL,
+            check_time TIMESTAMP NOT NULL,
+            FOREIGN KEY (metric_id) REFERENCES custom_metrics (id)
+        )
+    ''')
+    
+    # 创建索引
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_custom_metric_data_time 
+        ON custom_metric_data (check_time)
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_custom_metric_data_ip_time 
+        ON custom_metric_data (ip, check_time)
+    ''')
+    
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_custom_metric_data_metric 
+        ON custom_metric_data (metric_id, check_time)
     ''')
     
     conn.commit()
@@ -232,11 +276,27 @@ def save_host_to_db(ip, user, encrypted_password, port=22):
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
         
-        # 使用 INSERT OR REPLACE 来处理重复键（更新密码）
+        # 检查记录是否已存在
         cursor.execute('''
-            INSERT OR REPLACE INTO hosts (ip, user, encrypted_password, port)
-            VALUES (?, ?, ?, ?)
-        ''', (ip, user, encrypted_password, port))
+            SELECT created_at FROM hosts WHERE ip = ? AND user = ? AND port = ?
+        ''', (ip, user, port))
+        existing = cursor.fetchone()
+        
+        # 获取当前时间
+        from datetime import datetime
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        if existing:
+            # 记录已存在，更新密码
+            cursor.execute('''
+                UPDATE hosts SET encrypted_password = ? WHERE ip = ? AND user = ? AND port = ?
+            ''', (encrypted_password, ip, user, port))
+        else:
+            # 记录不存在，插入新记录，包含created_at字段
+            cursor.execute('''
+                INSERT INTO hosts (ip, user, encrypted_password, port, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (ip, user, encrypted_password, port, current_time))
         
         conn.commit()
         conn.close()
@@ -446,7 +506,7 @@ def save_monitoring_data(ip, cpu_usage, memory_usage, disk_usage, is_online=0, n
         cursor = conn.cursor()
         
         
-        check_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        check_time = datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')
         
         cursor.execute('''
             INSERT INTO monitoring_data (ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, is_online, check_time)
@@ -641,11 +701,11 @@ def delete_alert_rule(rule_id):
 
 def collect_monitoring_data():
     """采集监控数据"""
-    # 导入配置变量 - 使用默认值（True）来启用所有监控项
-    monitor_cpu = True
-    monitor_memory = True
-    monitor_disk = True
-    monitor_network = True
+    # 从环境变量读取配置 - 使用默认值（True）来启用所有监控项
+    monitor_cpu = os.environ.get('MONITOR_CPU', 'true').lower() == 'true'
+    monitor_memory = os.environ.get('MONITOR_MEMORY', 'true').lower() == 'true'
+    monitor_disk = os.environ.get('MONITOR_DISK', 'true').lower() == 'true'
+    monitor_network = os.environ.get('MONITOR_NETWORK', 'true').lower() == 'true'
     hosts = get_all_hosts()
     
     for host in hosts:
@@ -831,6 +891,53 @@ ansible_become_pass={password}
                 # 检查告警
                 check_alerts(ip, cpu_usage, memory_usage, disk_usage)
                 
+                # 采集自定义监控指标
+                try:
+                    # 获取所有激活的自定义监控指标
+                    conn = sqlite3.connect(DATABASE)
+                    cursor = conn.cursor()
+                    cursor.execute('SELECT id, metric_name, command FROM custom_metrics WHERE is_active = 1')
+                    custom_metrics = cursor.fetchall()
+                    conn.close()
+                    
+                    # 执行每个自定义指标的命令
+                    for metric in custom_metrics:
+                        metric_id, metric_name, command = metric
+                        try:
+                            # 执行自定义命令
+                            custom_cmd = ["ansible", ip, "-i", "ansible_inventory", "-m", "shell", "-a", command]
+                            custom_result = subprocess.run(custom_cmd, capture_output=True, text=True)
+                            custom_output = custom_result.stdout.strip()
+                            
+                            if custom_result.returncode == 0 and custom_output:
+                                # 解析输出，提取数值
+                                lines = custom_output.split('\n')
+                                for line in lines:
+                                    if line.strip():
+                                        # 尝试提取数字
+                                        numbers = re.findall(r'\d+(?:\.\d+)?', line)
+                                        if numbers:
+                                            try:
+                                                value = float(numbers[0])
+                                                # 保存自定义指标数据
+                                                conn = sqlite3.connect(DATABASE)
+                                                cursor = conn.cursor()
+                                                check_time = datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')
+                                                cursor.execute('''
+                                                    INSERT INTO custom_metric_data (metric_id, ip, value, check_time)
+                                                    VALUES (?, ?, ?, ?)
+                                                ''', (metric_id, ip, value, check_time))
+                                                conn.commit()
+                                                conn.close()
+                                                print(f"成功采集 {ip} 的自定义指标 {metric_name}: {value}")
+                                                break
+                                            except ValueError:
+                                                continue
+                        except Exception as e:
+                            print(f"采集 {ip} 的自定义指标 {metric_name} 时出错: {e}")
+                except Exception as e:
+                    print(f"处理自定义监控指标时出错: {e}")
+                
             else:
                 print(f"{ip} | 未成功响应: {output}")
                 # 保存离线状态，其他指标设为0
@@ -854,7 +961,7 @@ ansible_become_pass={password}
         cursor = conn.cursor()
         
         # 使用美化的日志格式
-        log_header = f"\n{'='*80}\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 监控数据采集完成\n{'='*80}\n"
+        log_header = f"\n{'='*80}\n{datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')} - 监控数据采集完成\n{'='*80}\n"
         with open(os.environ.get('MONITOR_LOG_FILE', 'monitor.log'), 'a', encoding='utf-8') as f:
             f.write(log_header)
             
@@ -957,19 +1064,19 @@ def monitoring_loop():
             cleanup_days = int(os.environ.get('MONITOR_CLEANUP_DAYS', 30))
             enable_auto_cleanup = os.environ.get('MONITOR_AUTO_CLEANUP', 'True').lower() == 'true'
             
-            print(f"{datetime.now()}: 开始采集监控数据")
+            print(f"{datetime.now(shanghai_tz)}: 开始采集监控数据")
             
             # 采集监控数据
             collect_monitoring_data()
             
             current_time = time.time()
-            print(f"{datetime.now()}: 监控数据采集完成，等待{monitor_interval}秒")
+            print(f"{datetime.now(shanghai_tz)}: 监控数据采集完成，等待{monitor_interval}秒")
             
             # 定期清理旧数据
             if enable_auto_cleanup and (current_time - last_cleanup_time) >= 24 * 60 * 60:
                 cleanup_old_data(cleanup_days)
                 last_cleanup_time = current_time
-                print(f"{datetime.now()}: 已清理{cleanup_days}天前的旧数据")
+                print(f"{datetime.now(shanghai_tz)}: 已清理{cleanup_days}天前的旧数据")
             
             time.sleep(monitor_interval)
             
@@ -1008,7 +1115,7 @@ def api_monitor_management_data():
                 'count': 1,
                 'type': 'error'
             },
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now(shanghai_tz).isoformat()
         }
         
         return jsonify(result)
@@ -1243,7 +1350,7 @@ def get_logs(limit=50):
         if not os.path.exists(log_file):
             # 创建日志文件并写入初始内容
             with open(log_file, 'w') as f:
-                f.write(f"{datetime.now()}: 监控日志初始化\n")
+                f.write(f"{datetime.now(shanghai_tz)}: 监控日志初始化\n")
         
         with open(log_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -1306,21 +1413,47 @@ def get_collection_status_data():
         result = cursor.fetchone()
         if result and result[0]:
             last_collection_time = result[0]
-        conn.close()
         
         # 获取配置信息
-        interval = os.environ.get('MONITOR_INTERVAL', '300')
+        interval = os.environ.get('MONITOR_INTERVAL', '30')
         
-        # 获取默认监控项配置
+        # 获取默认监控项配置 - 从主机监控配置中汇总
         monitor_items = []
-        if os.environ.get('MONITOR_CPU', 'true').lower() == 'true':
-            monitor_items.append('CPU')
-        if os.environ.get('MONITOR_MEMORY', 'true').lower() == 'true':
-            monitor_items.append('内存')
-        if os.environ.get('MONITOR_DISK', 'true').lower() == 'true':
-            monitor_items.append('磁盘')
-        if os.environ.get('MONITOR_NETWORK', 'true').lower() == 'true':
-            monitor_items.append('网络')
+        
+        # 检查是否存在主机监控配置表
+        cursor.execute('''
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='host_monitor_configs'
+        ''')
+        config_table_exists = cursor.fetchone() is not None
+        
+        if config_table_exists:
+            # 查询所有主机的监控配置
+            cursor.execute('''
+                SELECT monitor_cpu, monitor_memory, monitor_disk, monitor_network
+                FROM host_monitor_configs
+            ''')
+            configs = cursor.fetchall()
+            
+            # 汇总监控项：如果有任何主机启用了某个监控项，就显示该监控项
+            cpu_enabled = any(config[0] for config in configs)
+            memory_enabled = any(config[1] for config in configs)
+            disk_enabled = any(config[2] for config in configs)
+            network_enabled = any(config[3] for config in configs)
+            
+            if cpu_enabled:
+                monitor_items.append('CPU')
+            if memory_enabled:
+                monitor_items.append('内存')
+            if disk_enabled:
+                monitor_items.append('磁盘')
+            if network_enabled:
+                monitor_items.append('网络')
+        else:
+            # 如果没有配置表，使用默认值
+            monitor_items = ['CPU', '内存', '磁盘', '网络']
+        
+        conn.close()
         
         # 计算下次采集时间
         next_collection_time = "未知"
@@ -1328,6 +1461,8 @@ def get_collection_status_data():
             try:
                 import datetime
                 last_time = datetime.datetime.strptime(last_collection_time, '%Y-%m-%d %H:%M:%S')
+                # 转换为上海时间
+                last_time = shanghai_tz.localize(last_time)
                 next_time = last_time + datetime.timedelta(seconds=int(interval))
                 next_collection_time = next_time.strftime('%Y-%m-%d %H:%M:%S')
             except:
@@ -1396,15 +1531,17 @@ def get_real_time_data():
         result = {}
         for row in data:
             ip, cpu, memory, disk, network_rx, network_tx, is_online, check_time = row
-            result[ip] = {
-                'cpu_usage': cpu if cpu is not None else 0,
-                'memory_usage': memory if memory is not None else 0,
-                'disk_usage': disk if disk is not None else 0,
-                'network_rx': network_rx if network_rx is not None else 0,
-                'network_tx': network_tx if network_tx is not None else 0,
-                'is_online': bool(is_online) if is_online is not None else False,
-                'check_time': check_time
-            }
+            # 过滤掉IP为0.0.0.0的记录
+            if ip != '0.0.0.0':
+                result[ip] = {
+                    'cpu_usage': cpu if cpu is not None else 0,
+                    'memory_usage': memory if memory is not None else 0,
+                    'disk_usage': disk if disk is not None else 0,
+                    'network_rx': network_rx if network_rx is not None else 0,
+                    'network_tx': network_tx if network_tx is not None else 0,
+                    'is_online': bool(is_online) if is_online is not None else False,
+                    'check_time': check_time
+                }
         
         return jsonify(result)
     except sqlite3.Error as e:
@@ -1597,91 +1734,250 @@ def get_parsed_logs():
                     if time_match:
                         entry['timestamp'] = time_match.group(1)
                     else:
-                        entry['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        
+                        entry['timestamp'] = datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')
                     host_data[current_host]['entries'].append(entry)
                 continue
-                
-            # 解析网络流量行
-            if "网络RX:" in line or "网络TX:" in line:
-                rx_match = re.search(r'网络RX:\s*([\d.]+)(\w+)', line)
-                tx_match = re.search(r'网络TX:\s*([\d.]+)(\w+)', line)
-                
-                if rx_match or tx_match:
-                    entry = {}
-                    if rx_match:
-                        rx_value = float(rx_match.group(1))
-                        rx_unit = rx_match.group(2)
-                        # 统一转换为MB
-                        if rx_unit == 'KB':
-                            entry['network_rx'] = rx_value / 1024
-                        elif rx_unit == 'GB':
-                            entry['network_rx'] = rx_value * 1024
-                        else:  # MB or unknown
-                            entry['network_rx'] = rx_value
-                            
-                    if tx_match:
-                        tx_value = float(tx_match.group(1))
-                        tx_unit = tx_match.group(2)
-                        # 统一转换为MB
-                        if tx_unit == 'KB':
-                            entry['network_tx'] = tx_value / 1024
-                        elif tx_unit == 'GB':
-                            entry['network_tx'] = tx_value * 1024
-                        else:  # MB or unknown
-                            entry['network_tx'] = tx_value
-                            
-                    if entry and current_host in host_data and host_data[current_host]['entries']:
-                        # 将网络数据添加到最新的一条记录中
-                        latest_entry = host_data[current_host]['entries'][-1]
-                        latest_entry.update(entry)
-                continue
-                
-            # 解析系统日志
-            if "监控数据采集完成" in line or "ERROR" in line or "INFO" in line:
-                time_match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
-                timestamp = time_match.group(1) if time_match else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                parsed_logs.append({
-                    'type': 'system',
-                    'timestamp': timestamp,
-                    'message': line,
-                    'level': 'error' if 'ERROR' in line else 'info'
-                })
         
-        # 转换主机数据为列表
+        # 转换为列表格式
         for ip, data in host_data.items():
-            if data['entries']:
-                # 获取最新的条目
-                latest_entry = data['entries'][-1]
-                parsed_logs.append({
-                    'type': 'host_metrics',
-                    'ip': data['ip'],
-                    'status': data.get('status', '未知'),
-                    'timestamp': latest_entry.get('timestamp'),
-                    'cpu': latest_entry.get('cpu', 0),
-                    'memory': latest_entry.get('memory', 0),
-                    'disk': latest_entry.get('disk', 0),
-                    'network_rx': latest_entry.get('network_rx', 0),
-                    'network_tx': latest_entry.get('network_tx', 0)
-                })
-        
-        # 按时间戳排序
-        parsed_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            if data.get('entries'):
+                parsed_logs.append(data)
         
         return jsonify({
-            'logs': parsed_logs[:50],  # 返回最新50条
+            'logs': parsed_logs,
             'count': len(parsed_logs),
-            'type': 'parsed'
+            'type': 'host_metrics'
         })
         
     except Exception as e:
+        print(f"解析日志失败: {e}")
         return jsonify({
             'logs': [],
             'count': 0,
             'type': 'error',
-            'message': f"解析日志失败: {str(e)}"
+            'message': str(e)
         })
+
+# 自定义监控指标API端点
+@app.route('/api/custom_metrics', methods=['GET'])
+def get_custom_metrics():
+    """获取所有自定义监控指标"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, metric_name, metric_description, command, unit, is_active, created_at, updated_at FROM custom_metrics')
+        metrics = cursor.fetchall()
+        conn.close()
+        
+        # 转换为字典格式
+        result = []
+        for metric in metrics:
+            result.append({
+                'id': metric[0],
+                'metric_name': metric[1],
+                'metric_description': metric[2],
+                'command': metric[3],
+                'unit': metric[4],
+                'is_active': bool(metric[5]),
+                'created_at': metric[6],
+                'updated_at': metric[7]
+            })
+        
+        return jsonify({'success': True, 'metrics': result})
+    except Exception as e:
+        print(f"获取自定义指标失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/custom_metrics', methods=['POST'])
+def add_custom_metric():
+    """添加自定义监控指标"""
+    try:
+        data = request.json
+        metric_name = data.get('metric_name')
+        metric_description = data.get('metric_description', '')
+        command = data.get('command')
+        unit = data.get('unit', '%')
+        
+        if not metric_name or not command:
+            return jsonify({'success': False, 'message': '指标名称和命令不能为空'})
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO custom_metrics (metric_name, metric_description, command, unit)
+            VALUES (?, ?, ?, ?)
+        ''', (metric_name, metric_description, command, unit))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': '自定义指标添加成功'})
+    except Exception as e:
+        print(f"添加自定义指标失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/custom_metrics/<int:metric_id>', methods=['PUT'])
+def update_custom_metric(metric_id):
+    """更新自定义监控指标"""
+    try:
+        data = request.json
+        metric_name = data.get('metric_name')
+        metric_description = data.get('metric_description', '')
+        command = data.get('command')
+        unit = data.get('unit', '%')
+        is_active = 1 if data.get('is_active', True) else 0
+        
+        if not metric_name or not command:
+            return jsonify({'success': False, 'message': '指标名称和命令不能为空'})
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE custom_metrics
+            SET metric_name = ?, metric_description = ?, command = ?, unit = ?, is_active = ?
+            WHERE id = ?
+        ''', (metric_name, metric_description, command, unit, is_active, metric_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': '自定义指标更新成功'})
+    except Exception as e:
+        print(f"更新自定义指标失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/custom_metrics/<int:metric_id>', methods=['DELETE'])
+def delete_custom_metric(metric_id):
+    """删除自定义监控指标"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 先删除关联的数据
+        cursor.execute('DELETE FROM custom_metric_data WHERE metric_id = ?', (metric_id,))
+        # 再删除指标
+        cursor.execute('DELETE FROM custom_metrics WHERE id = ?', (metric_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': '自定义指标删除成功'})
+    except Exception as e:
+        print(f"删除自定义指标失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/custom_metric_data', methods=['GET'])
+def get_custom_metric_data():
+    """获取自定义监控指标数据"""
+    try:
+        metric_id = request.args.get('metric_id', type=int)
+        ip = request.args.get('ip')
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
+        limit = request.args.get('limit', 1000, type=int)
+        
+        if not metric_id or not ip or not start_time or not end_time:
+            return jsonify({'success': False, 'message': '缺少必要参数'})
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        query = '''
+            SELECT check_time, value FROM custom_metric_data 
+            WHERE metric_id = ? AND ip = ? AND check_time BETWEEN ? AND ? 
+            ORDER BY check_time ASC LIMIT ?
+        '''
+        cursor.execute(query, (metric_id, ip, start_time, end_time, limit))
+        data = cursor.fetchall()
+        conn.close()
+        
+        # 转换为前端可用格式
+        result = {
+            'labels': [row[0] for row in data],
+            'values': [row[1] for row in data]
+        }
+        
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        print(f"获取自定义指标数据失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/api/custom_metric_statistics', methods=['GET'])
+def get_custom_metric_statistics():
+    """获取自定义监控指标统计数据"""
+    try:
+        metric_id = request.args.get('metric_id', type=int)
+        ip = request.args.get('ip')
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
+        
+        if not metric_id or not ip or not start_time or not end_time:
+            return jsonify({'success': False, 'message': '缺少必要参数'})
+        
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取原始数据
+        query = '''
+            SELECT value FROM custom_metric_data 
+            WHERE metric_id = ? AND ip = ? AND check_time BETWEEN ? AND ? 
+            ORDER BY value ASC
+        '''
+        cursor.execute(query, (metric_id, ip, start_time, end_time))
+        data = cursor.fetchall()
+        conn.close()
+        
+        if not data:
+            return jsonify({'success': True, 'statistics': {
+                'average': 0,
+                'peak': 0,
+                'minimum': 0,
+                'median': 0,
+                'std_dev': 0,
+                'count': 0
+            }})
+        
+        # 提取数值并过滤None值
+        values = [row[0] for row in data if row[0] is not None]
+        count = len(values)
+        
+        if count == 0:
+            return jsonify({'success': True, 'statistics': {
+                'average': 0,
+                'peak': 0,
+                'minimum': 0,
+                'median': 0,
+                'std_dev': 0,
+                'count': 0
+            }})
+        
+        # 计算基本统计数据
+        import statistics
+        
+        average = sum(values) / count
+        
+        # 计算最小值、最大值和中位数时剔除使用率一直为0%的数据点
+        non_zero_values = [v for v in values if v > 0]
+        
+        # 计算最大值（峰值）
+        peak = max(non_zero_values) if non_zero_values else max(values)
+        
+        # 计算最小值
+        minimum = min(non_zero_values) if non_zero_values else min(values)
+        
+        # 计算中位数
+        median = statistics.median(non_zero_values) if non_zero_values else statistics.median(values)
+        
+        std_dev = statistics.stdev(values) if count > 1 else 0
+        
+        return jsonify({'success': True, 'statistics': {
+            'average': round(average, 2),
+            'peak': round(peak, 2),
+            'minimum': round(minimum, 2),
+            'median': round(median, 2),
+            'std_dev': round(std_dev, 2),
+            'count': count
+        }})
+    except Exception as e:
+        print(f"获取自定义指标统计数据失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
 
 
 @app.route('/api/host_monitor_configs')
@@ -1813,7 +2109,7 @@ def clear_logs():
         log_file = os.environ.get('MONITOR_LOG_FILE', 'monitor.log')
         if os.path.exists(log_file):
             with open(log_file, 'w') as f:
-                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')} - monitor_scheduler - INFO - 日志已清空\n")
+                f.write(f"{datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S,%f')} - monitor_scheduler - INFO - 日志已清空\n")
         
         return jsonify({
             'success': True,
@@ -1832,30 +2128,15 @@ def save_config():
         data = request.get_json()
         
         # 更新环境变量
-        os.environ['MONITOR_INTERVAL'] = str(data.get('interval', 300))
+        os.environ['MONITOR_INTERVAL'] = str(data.get('interval', 30))
         os.environ['MONITOR_CLEANUP_DAYS'] = str(data.get('cleanup_days', 30))
         os.environ['MONITOR_AUTO_CLEANUP'] = 'True' if data.get('auto_cleanup', True) else 'False'
         
-        # 重启监控线程以应用新配置
-        global monitor_thread
-        if 'monitor_thread' in globals() and monitor_thread.is_alive():
-            # 停止当前监控线程（通过设置标志位）
-            if 'stop_monitoring' in globals():
-                stop_monitoring = True
-            else:
-                globals()['stop_monitoring'] = True
-            
-            # 等待线程结束
-            monitor_thread.join(timeout=5)
-            
-            # 创建新的监控线程
-            import importlib
-            import monitor_config
-            importlib.reload(monitor_config)
-            
-            globals()['stop_monitoring'] = False
-            monitor_thread = threading.Thread(target=monitoring_loop, daemon=True)
-            monitor_thread.start()
+        # 更新监控项配置
+        os.environ['MONITOR_CPU'] = 'True' if data.get('monitor_cpu', True) else 'False'
+        os.environ['MONITOR_MEMORY'] = 'True' if data.get('monitor_memory', True) else 'False'
+        os.environ['MONITOR_DISK'] = 'True' if data.get('monitor_disk', True) else 'False'
+        os.environ['MONITOR_NETWORK'] = 'True' if data.get('monitor_network', True) else 'False'
         
         return jsonify({
             'success': True,
@@ -1865,6 +2146,32 @@ def save_config():
         return jsonify({
             'success': False,
             'message': str(e)
+        })
+
+@app.route('/api/get_config')
+def get_config():
+    """获取当前监控配置"""
+    try:
+        # 从环境变量读取配置
+        config = {
+            'interval': int(os.environ.get('MONITOR_INTERVAL', 30)),
+            'cleanup_days': int(os.environ.get('MONITOR_CLEANUP_DAYS', 30)),
+            'auto_cleanup': os.environ.get('MONITOR_AUTO_CLEANUP', 'True').lower() == 'true',
+            'monitor_cpu': os.environ.get('MONITOR_CPU', 'true').lower() == 'true',
+            'monitor_memory': os.environ.get('MONITOR_MEMORY', 'true').lower() == 'true',
+            'monitor_disk': os.environ.get('MONITOR_DISK', 'true').lower() == 'true',
+            'monitor_network': os.environ.get('MONITOR_NETWORK', 'true').lower() == 'true'
+        }
+        
+        return jsonify({
+            'success': True,
+            'config': config
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'config': {}
         })
 
 @app.route('/api/network_trends')
@@ -1983,6 +2290,11 @@ def alerts_page():
 def historical_data_page():
     """历史数据查询页面"""
     return render_template('historical_data.html')
+
+@app.route('/trend_prediction')
+def trend_prediction_page():
+    """趋势预测与容量规划页面"""
+    return render_template('trend_prediction.html')
 
 # ========== 告警管理API ==========
 @app.route('/api/alert_rules', methods=['GET'])
@@ -2166,7 +2478,200 @@ def api_get_historical_data():
         print(f"查询历史数据未知错误: {e}")
         return jsonify({'success': False, 'message': f'查询失败: {str(e)}'})
 
+# ========== 趋势预测API ==========
+@app.route('/api/predict_trend', methods=['GET'])
+def api_predict_trend():
+    """获取资源使用趋势预测"""
+    try:
+        # 导入预测工具
+        from prediction_utils import predict_resource_trend
+        
+        # 获取查询参数
+        ip = request.args.get('ip')
+        metric_type = request.args.get('metric_type', 'cpu')  # cpu, memory, disk
+        days_to_predict = request.args.get('days', 7, type=int)
+        prediction_method = request.args.get('method', 'linear')  # linear, moving_avg, exponential
+        
+        # 参数验证
+        if not ip:
+            return jsonify({'success': False, 'message': '缺少必要参数: IP地址'})
+        
+        # 验证IP地址格式
+        import re
+        ip_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+        if not ip_pattern.match(ip):
+            return jsonify({'success': False, 'message': 'IP地址格式不正确'})
+        
+        # 验证metric_type参数
+        valid_metrics = ['cpu', 'memory', 'disk']
+        if metric_type not in valid_metrics:
+            return jsonify({'success': False, 'message': 'metric_type参数无效，可选值: cpu, memory, disk'})
+        
+        # 执行预测
+        prediction_data = predict_resource_trend(
+            host_ip=ip,
+            metric_type=metric_type,
+            days_to_predict=days_to_predict,
+            prediction_method=prediction_method
+        )
+        
+        return jsonify({
+            'success': True,
+            'data': prediction_data,
+            'prediction_info': {
+                'host_ip': ip,
+                'metric_type': metric_type,
+                'days_predicted': days_to_predict,
+                'prediction_method': prediction_method
+            }
+        })
+        
+    except Exception as e:
+        print(f"执行趋势预测失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
 
+@app.route('/api/capacity_plan', methods=['GET'])
+def api_capacity_plan():
+    """获取容量规划建议"""
+    try:
+        # 导入容量规划工具
+        from capacity_planning_utils import generate_host_capacity_plan, generate_fleet_capacity_summary
+        from prediction_utils import predict_resource_trend
+        
+        # 获取查询参数
+        ip = request.args.get('ip')  # 单个主机IP，如果不提供则生成整个集群的规划
+        days_ahead = request.args.get('days', 30, type=int)
+        prediction_method = request.args.get('method', 'linear')
+        
+        if ip:
+            # 单个主机容量规划
+            # 验证IP地址格式
+            import re
+            ip_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+            if not ip_pattern.match(ip):
+                return jsonify({'success': False, 'message': 'IP地址格式不正确'})
+            
+            plan = generate_host_capacity_plan(
+                host_ip=ip,
+                days_ahead=days_ahead,
+                prediction_method=prediction_method
+            )
+            
+            return jsonify({
+                'success': True,
+                'type': 'single_host',
+                'data': plan
+            })
+        else:
+            # 整个集群容量规划
+            summary = generate_fleet_capacity_summary(
+                days_ahead=days_ahead,
+                prediction_method=prediction_method
+            )
+            
+            return jsonify({
+                'success': True,
+                'type': 'fleet_summary',
+                'data': summary
+            })
+            
+    except Exception as e:
+        print(f"生成容量规划失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+# 统计分析页面
+@app.route('/statistics')
+def statistics():
+    """统计分析页面"""
+    try:
+        conn = sqlite3.connect(DATABASE)
+        cursor = conn.cursor()
+        
+        # 获取所有主机IP
+        cursor.execute("SELECT DISTINCT ip FROM hosts")
+        hosts = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        # 使用模板渲染页面
+        return render_template('statistics.html', hosts=hosts)
+    except Exception as e:
+        print(f"获取主机列表失败: {e}")
+        
+        # 使用模板渲染错误页面
+        return render_template('statistics.html', hosts=[])
+
+# API: 获取统计数据
+@app.route('/api/statistics')
+def api_statistics():
+    """获取统计数据"""
+    try:
+        # 获取请求参数
+        host_ip = request.args.get('host_ip')
+        metrics = request.args.get('metrics', 'cpu_usage,memory_usage,disk_usage')
+        start_time = request.args.get('start_time', datetime.now(shanghai_tz).strftime('%Y-%m-%d 00:00:00'))
+        end_time = request.args.get('end_time', datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S'))
+        
+        # 解析指标列表
+        metric_fields = metrics.split(',')
+        
+        # 创建数据库工具实例
+        db_utils = DatabaseUtils()
+        
+        # 获取统计数据
+        if host_ip:
+            # 获取单个主机的统计数据
+            stats = db_utils.get_metric_statistics(host_ip, metric_fields, start_time, end_time)
+            return jsonify({
+                'success': True,
+                'type': 'single_host',
+                'host_ip': host_ip,
+                'statistics': stats
+            })
+        else:
+            # 获取所有主机的统计数据（默认使用第一个指标）
+            main_metric = metric_fields[0]
+            stats = db_utils.get_all_hosts_statistics(main_metric, start_time, end_time)
+            return jsonify({
+                'success': True,
+                'type': 'all_hosts',
+                'metric': main_metric,
+                'statistics': stats
+            })
+    except Exception as e:
+        print(f"获取统计数据失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+# API: 获取图表数据
+@app.route('/api/statistics/chart')
+def api_statistics_chart():
+    """获取图表数据"""
+    try:
+        # 获取请求参数
+        host_ip = request.args.get('host_ip')
+        metrics = request.args.get('metrics', 'cpu_usage,memory_usage')
+        start_time = request.args.get('start_time', datetime.now(shanghai_tz).strftime('%Y-%m-%d 00:00:00'))
+        end_time = request.args.get('end_time', datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S'))
+        limit = int(request.args.get('limit', 1000))
+        
+        # 解析指标列表
+        metric_fields = metrics.split(',')
+        
+        # 创建数据库工具实例
+        db_utils = DatabaseUtils()
+        
+        # 获取图表数据
+        chart_data = db_utils.get_metrics_for_chart(host_ip, metric_fields, start_time, end_time, limit)
+        
+        return jsonify({
+            'success': True,
+            'chart_data': chart_data
+        })
+    except Exception as e:
+        print(f"获取图表数据失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+# 在现有的API基础上添加以下功能
 
 @app.route('/api/network_summary')
 def api_network_summary():
@@ -2231,7 +2736,6 @@ def send_alert_notification(alert_data):
     except Exception as e:
         print(f"发送通知失败: {e}")
         return False
-
 
 
 @app.route('/api/export/excel')
@@ -2538,7 +3042,7 @@ def generate_enhanced_html_report(stats, detailed_data, start_date, end_date, ho
             <h1>📊 {title}</h1>
             <p>📅 统计期间: {start_date} 至 {end_date}</p>
             <p>🖥️ 监控范围: {f"主机 {host_ip}" if host_ip else "所有主机"} | 总数: {host_count}台</p>
-            <p>⏰ 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p>⏰ 生成时间: {datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')}</p>
         </div>
         
         <div class="section">
@@ -2684,6 +3188,172 @@ def api_export_csv():
     
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/reports/<path:filename>')
+def serve_report(filename):
+    """提供报告文件的HTTP访问"""
+    import urllib.parse
+    filename = urllib.parse.unquote(filename)
+    file_path = os.path.join('reports', filename)
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=False, mimetype='text/html')
+    else:
+        return jsonify({'success': False, 'message': '文件不存在'}), 404
+
+@app.route('/api/generate_report', methods=['POST'])
+def generate_report():
+    """生成监控报告"""
+    try:
+        # 获取请求数据
+        data = request.get_json()
+        start_date = data.get('start_date', '')
+        end_date = data.get('end_date', '')
+        host_filter = data.get('host_filter', '')
+        report_title = data.get('report_title', '服务器监控报告')
+        report_type = data.get('report_type', 'custom')
+        
+        # 连接数据库
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # 构建查询条件
+        where_clause = ""
+        params = []
+        
+        if start_date and end_date:
+            where_clause += " WHERE check_time BETWEEN ? AND ?"
+            params.extend([start_date, f"{end_date} 23:59:59"])
+        
+        if host_filter:
+            where_clause += " AND ip = ?"
+            params.append(host_filter)
+        
+        # 查询主机列表
+        cursor.execute(f"SELECT DISTINCT ip FROM monitoring_data {where_clause}", params)
+        hosts = [row['ip'] for row in cursor.fetchall()]
+        
+        # 查询监控数据
+        cursor.execute(f"SELECT ip, cpu_usage, memory_usage, disk_usage, network_rx, network_tx, check_time FROM monitoring_data {where_clause} ORDER BY check_time DESC", params)
+        monitoring_data = cursor.fetchall()
+        
+        # 查询自定义指标数据
+        cursor.execute(f"SELECT metric_id, value, check_time FROM custom_metric_data {where_clause} ORDER BY check_time DESC", params)
+        custom_metrics_data = cursor.fetchall()
+        
+        # 关闭数据库连接
+        conn.close()
+        
+        # 生成HTML报告
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>{report_title}</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1 {{ color: #333; text-align: center; }}
+                h2 {{ color: #555; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
+                .report-info {{ background-color: #f5f5f5; padding: 10px; border-radius: 5px; margin-bottom: 20px; }}
+                .host-section {{ margin-bottom: 30px; }}
+                .metrics-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+                .metrics-table th, .metrics-table td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                .metrics-table th {{ background-color: #f2f2f2; }}
+                .metrics-table tr:nth-child(even) {{ background-color: #f9f9f9; }}
+                .summary {{ background-color: #e8f4f8; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
+                .no-data {{ color: #999; text-align: center; padding: 20px; }}
+            </style>
+        </head>
+        <body>
+            <h1>{report_title}</h1>
+            <div class="report-info">
+                <p>生成时间: {datetime.now(shanghai_tz).strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <p>数据范围: {start_date} 至 {end_date}</p>
+                <p>报告类型: {report_type}</p>
+                <p>主机数量: {len(hosts)}</p>
+            </div>
+            
+            <div class="summary">
+                <h2>摘要</h2>
+                <p>本报告包含了指定时间范围内的服务器监控数据，包括CPU使用率、内存使用率、磁盘使用率和网络流量等指标。</p>
+                <p>共监控了 {len(hosts)} 台主机，采集了 {len(monitoring_data)} 条监控数据记录。</p>
+            </div>
+            
+            <h2>主机列表</h2>
+            <ul>
+                {''.join([f'<li>{host}</li>' for host in hosts])}
+            </ul>
+            
+            <h2>监控数据详情</h2>
+            {'''
+            <table class="metrics-table">
+                <tr>
+                    <th>主机IP</th>
+                    <th>CPU使用率 (%)</th>
+                    <th>内存使用率 (%)</th>
+                    <th>磁盘使用率 (%)</th>
+                    <th>网络接收 (B)</th>
+                    <th>网络发送 (B)</th>
+                    <th>采集时间</th>
+                </tr>
+                '''}
+                {''.join([f'''<tr>
+                    <td>{row['ip']}</td>
+                    <td>{row['cpu_usage']:.1f}</td>
+                    <td>{row['memory_usage']:.1f}</td>
+                    <td>{row['disk_usage']:.1f}</td>
+                    <td>{row['network_rx']}</td>
+                    <td>{row['network_tx']}</td>
+                    <td>{row['check_time']}</td>
+                </tr>''' for row in monitoring_data])}
+            </table>
+            
+            <h2>自定义指标数据</h2>
+            {'''
+            <table class="metrics-table">
+                <tr>
+                    <th>指标ID</th>
+                    <th>数值</th>
+                    <th>采集时间</th>
+                </tr>
+                '''}
+                {''.join([f'''<tr>
+                    <td>{row['metric_id']}</td>
+                    <td>{row['value']}</td>
+                    <td>{row['check_time']}</td>
+                </tr>''' for row in custom_metrics_data])}
+            </table>
+            
+            <h2>报告说明</h2>
+            <p>本报告由Server Monitor系统自动生成，包含了服务器监控的关键指标数据。</p>
+            <p>报告数据来源于系统采集的监控数据，仅供参考。</p>
+        </body>
+        </html>
+        """
+        
+        # 保存报告文件
+        report_filename = f"{report_title}_{start_date}_{end_date}.html".replace(' ', '_').replace('/', '-')
+        report_path = os.path.join('reports', report_filename)
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        # 返回成功响应
+        return jsonify({
+            'success': True,
+            'message': '报告生成成功',
+            'report_url': f'/{report_path}',
+            'report_filename': report_filename,
+            'report_path': report_path,
+            'hosts_count': len(hosts),
+            'data_count': len(monitoring_data)
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        })
 
 if __name__ == '__main__':
     # 初始化数据库

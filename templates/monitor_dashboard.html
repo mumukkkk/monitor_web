@@ -4,7 +4,8 @@
     <title>监控大屏 - Server Monitor</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
     <style>
         :root {
             /* 核心变量 */
@@ -33,6 +34,7 @@
             --bg-card: rgba(45, 45, 45, 0.6);
             --border-glass: rgba(255, 255, 255, 0.08);
             --shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            --wallpaper: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
         }
 
         body {
@@ -154,7 +156,7 @@
         .charts-area { display: flex; flex-direction: column; gap: 20px; }
 
         /* 顶部统计条 */
-        .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
         .stat-card {
             background: linear-gradient(135deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.4) 100%);
             padding: 20px;
@@ -224,6 +226,7 @@
             <a class="nav-item" href="/monitor_management">监控配置</a>
             <a class="nav-item" href="/alerts">告警管理</a>
             <a class="nav-item" href="/historical_data">历史数据</a>
+            <a class="nav-item" href="/statistics">统计分析</a>
         </div>
         <div class="action-btns">
             <button class="theme-btn" onclick="openSettingsModal()" title="壁纸设置">🎨</button>
@@ -259,6 +262,10 @@
                 <div class="stat-card">
                     <div class="stat-label">平均内存</div>
                     <div class="stat-val" id="avg-memory">0%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">平均磁盘</div>
+                    <div class="stat-val" id="avg-disk">0%</div>
                 </div>
             </div>
 
@@ -356,14 +363,19 @@
             if (currentMode === 'auto') {
                 const h = new Date().getHours();
                 isDark = (h < 6 || h >= 18);
-            } else if (currentMode === 'dark') isDark = true;
+                themeBtn.textContent = '🌤️'; // 自动模式显示特殊图标
+            } else if (currentMode === 'dark') {
+                isDark = true;
+                themeBtn.textContent = '🌙';
+            } else {
+                isDark = false;
+                themeBtn.textContent = '☀️';
+            }
             
             if (isDark) {
                 document.body.classList.add('dark-mode');
-                themeBtn.textContent = '🌙';
             } else {
                 document.body.classList.remove('dark-mode');
-                themeBtn.textContent = '☀️';
             }
             // 重新渲染图表以适配深色/浅色
             setTimeout(() => {
@@ -382,18 +394,53 @@
 
         // ============ 数据逻辑 ============
         function fetchMonitoringData() {
-            fetch('/get_real_time_data')
+            fetch('/api/hosts')
                 .then(r => r.json())
                 .then(data => {
-                    allHostsData = data;
-                    updateStats(data);
-                    renderHostList(data);
-                    
-                    if (!currentSelectedHost && Object.keys(data).length > 0) {
-                        selectHost(Object.keys(data)[0]);
-                    } else if (currentSelectedHost) {
-                        updateCharts(currentSelectedHost);
+                    // 检查API返回的数据格式
+                    if (data.success && data.hosts) {
+                        // 转换数据格式，适配现有代码
+                        const formattedData = {};
+                        for (const hostKey in data.hosts) {
+                            const host = data.hosts[hostKey];
+                            // 使用IP作为键，适配现有代码
+                            const ip = host.ip;
+                            formattedData[ip] = {
+                                cpu_usage: host.cpu_usage || 0,
+                                memory_usage: host.memory_usage || 0,
+                                disk_usage: host.disk_usage || 0,
+                                network_rx: host.network_rx || 0,
+                                network_tx: host.network_tx || 0,
+                                is_online: host.is_online || false,
+                                check_time: host.last_check || host.check_time || '',
+                                // 保留原始主机信息
+                                host_info: host
+                            };
+                        }
+                        
+                        allHostsData = formattedData;
+                        updateStats(formattedData);
+                        renderHostList(formattedData);
+                        
+                        if (!currentSelectedHost && Object.keys(formattedData).length > 0) {
+                            selectHost(Object.keys(formattedData)[0]);
+                        } else if (currentSelectedHost) {
+                            updateCharts(currentSelectedHost);
+                        }
+                    } else {
+                        console.error('API返回数据格式错误:', data);
+                        // 如果API返回格式错误，使用空数据
+                        allHostsData = {};
+                        updateStats({});
+                        renderHostList({});
                     }
+                })
+                .catch(error => {
+                    console.error('获取数据失败:', error);
+                    // 处理API调用失败的情况
+                    allHostsData = {};
+                    updateStats({});
+                    renderHostList({});
                 });
         }
 
@@ -405,16 +452,70 @@
                 const host = data[ip];
                 const item = document.createElement('div');
                 item.className = `host-item ${currentSelectedHost === ip ? 'active' : ''}`;
-                item.onclick = () => selectHost(ip);
                 item.innerHTML = `
-                    <div class="host-ip">${ip}</div>
-                    <div class="host-status">
-                        <span class="dot ${host.is_online ? 'dot-online' : 'dot-offline'}"></span>
-                        ${host.is_online ? '运行中' : '已断开'}
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div style="cursor: pointer; flex: 1;" onclick="selectHost('${ip}')">
+                            <div class="host-ip">${ip}</div>
+                            <div class="host-status">
+                                <span class="dot ${host.is_online ? 'dot-online' : 'dot-offline'}"></span>
+                                ${host.is_online ? '运行中' : '已断开'}
+                            </div>
+                        </div>
+                        <button style="background: transparent; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 4px; margin-left: 10px;" onclick="deleteServer('${ip}', event)">
+                            <i class="fas fa-trash"></i>
+                        </button>
                     </div>
                 `;
                 container.appendChild(item);
             });
+        }
+        
+        function deleteServer(ip, event) {
+            event.stopPropagation(); // 阻止事件冒泡，避免触发选择服务器
+            if (confirm(`确定要删除服务器 ${ip} 吗？`)) {
+                // 获取主机信息
+                const host = allHostsData[ip];
+                if (!host) {
+                    alert('未找到主机信息，删除失败');
+                    return;
+                }
+                
+                // 从主机信息中提取所需参数
+                const user = host.host_info ? host.host_info.user : 'root';
+                const port = host.host_info ? host.host_info.port : 22;
+                
+                // 创建表单数据
+                const formData = new FormData();
+                formData.append('ip', ip);
+                formData.append('user', user);
+                formData.append('port', port);
+                formData.append('confirm_user', user);
+                
+                // 调用删除API
+                fetch('/delete_host', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // 删除成功，刷新数据
+                        fetchMonitoringData();
+                        // 如果删除的是当前选中的服务器，清除选中状态
+                        if (currentSelectedHost === ip) {
+                            currentSelectedHost = null;
+                            document.getElementById('current-host').textContent = '选择服务器';
+                        }
+                        alert('删除成功: ' + data.message);
+                    } else {
+                        alert('删除失败: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('删除服务器失败:', error);
+                    alert('删除服务器失败，请重试');
+                });
+            }
         }
 
         function selectHost(ip) {
@@ -424,17 +525,49 @@
             updateCharts(ip);
         }
 
+        // ============ 数据格式化工具函数 ============
+        function formatNumber(value, decimals = 1) {
+            if (isNaN(value) || value === null || value === undefined) {
+                return '0';
+            }
+            return parseFloat(value).toFixed(decimals);
+        }
+
+        function formatPercentage(value, decimals = 1) {
+            if (isNaN(value) || value === null || value === undefined) {
+                return '0%';
+            }
+            return parseFloat(value).toFixed(decimals) + '%';
+        }
+
+        function formatBytes(bytes, decimals = 1) {
+            if (isNaN(bytes) || bytes === null || bytes === undefined || bytes === 0) {
+                return '0 B';
+            }
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
         function updateStats(data) {
             const hosts = Object.values(data);
             const total = hosts.length;
             const online = hosts.filter(h => h.is_online).length;
             const avgCpu = hosts.reduce((a, b) => a + (b.cpu_usage||0), 0) / total || 0;
             const avgMem = hosts.reduce((a, b) => a + (b.memory_usage||0), 0) / total || 0;
+            const avgDisk = hosts.reduce((a, b) => a + (b.disk_usage||0), 0) / total || 0;
+            
+            // 计算平均网络流量
+            const avgNetworkRx = hosts.reduce((a, b) => a + (b.network_rx||0), 0) / total || 0;
+            const avgNetworkTx = hosts.reduce((a, b) => a + (b.network_tx||0), 0) / total || 0;
 
             document.getElementById('total-servers').innerText = total;
             document.getElementById('online-servers').innerText = online;
-            document.getElementById('avg-cpu').innerText = avgCpu.toFixed(1) + '%';
-            document.getElementById('avg-memory').innerText = avgMem.toFixed(1) + '%';
+            document.getElementById('avg-cpu').innerText = formatPercentage(avgCpu);
+            document.getElementById('avg-memory').innerText = formatPercentage(avgMem);
+            document.getElementById('avg-disk').innerText = formatPercentage(avgDisk);
         }
 
         // ============ 图表更新 ============
@@ -458,7 +591,7 @@
             cpuTrendChart.setOption({
                 grid: { top: 30, bottom: 20, left: 35, right: 10 },
                 xAxis: { type: 'category', data: timePoints, axisLabel: { color: textColor } },
-                yAxis: { type: 'value', max: 100, axisLabel: { color: textColor }, splitLine: { lineStyle: { type: 'dashed', color: splitLineColor } } },
+                yAxis: { type: 'value', max: 100, axisLabel: { color: textColor, formatter: '{value}%' }, splitLine: { lineStyle: { type: 'dashed', color: splitLineColor } } },
                 series: [{ type: 'line', data: cpuHistoryData[ip], smooth: true, areaStyle: { opacity: 0.2 }, itemStyle: { color: '#6366f1' } }]
             });
 
@@ -466,20 +599,39 @@
             memoryBarChart.setOption({
                 grid: { top: 30, bottom: 20, left: 35, right: 10 },
                 xAxis: { type: 'category', data: ['内存'], axisLabel: { show: false } },
-                yAxis: { type: 'value', max: 100, axisLabel: { color: textColor }, splitLine: { lineStyle: { color: splitLineColor } } },
+                yAxis: { type: 'value', max: 100, axisLabel: { color: textColor, formatter: '{value}%' }, splitLine: { lineStyle: { color: splitLineColor } } },
                 series: [{ type: 'bar', data: [hostData.memory_usage], barWidth: 40, itemStyle: { color: '#10b981', borderRadius: [5,5,0,0] }, label: { show: true, position: 'top', formatter: '{c}%', color: textColor } }]
             });
 
             // 3. 磁盘
             diskRingChart.setOption({
+                tooltip: {
+                    trigger: 'item',
+                    formatter: function(params) {
+                        return `${params.name}: ${params.value.toFixed(1)}%`;
+                    }
+                },
                 series: [{
                     type: 'pie', radius: ['50%', '70%'],
                     data: [
-                        { value: hostData.disk_usage, name: '已用', itemStyle: { color: '#f59e0b' } },
-                        { value: 100 - hostData.disk_usage, name: '空闲', itemStyle: { color: isDark ? '#333' : '#eee' } }
+                        { value: hostData.disk_usage, name: '已用空间', itemStyle: { color: '#f59e0b' } },
+                        { value: 100 - hostData.disk_usage, name: '可用空间', itemStyle: { color: isDark ? '#333' : '#eee' } }
                     ],
-                    label: { show: false },
-                    emphasis: { label: { show: true, fontSize: 16, fontWeight: 'bold', formatter: '{d}%', color: textColor } }
+                    label: { 
+                        show: true, 
+                        formatter: '{b}: {d}%',
+                        color: textColor,
+                        fontSize: 12
+                    },
+                    emphasis: { 
+                        label: { 
+                            show: true, 
+                            fontSize: 16, 
+                            fontWeight: 'bold', 
+                            formatter: '{b}: {d}%', 
+                            color: textColor 
+                        }
+                    }
                 }]
             });
 
@@ -487,26 +639,97 @@
             let onlineCount = Object.values(allHostsData).filter(h => h.is_online).length;
             let offlineCount = Object.values(allHostsData).length - onlineCount;
             statusPieChart.setOption({
+                tooltip: {
+                    trigger: 'item',
+                    formatter: function(params) {
+                        return `${params.name}: ${params.value}台 (${params.percent.toFixed(1)}%)`;
+                    }
+                },
                 series: [{
                     type: 'pie', radius: '60%',
                     data: [
-                        { value: onlineCount, name: '在线', itemStyle: { color: '#10b981' } },
-                        { value: offlineCount, name: '离线', itemStyle: { color: '#ef4444' } }
+                        { value: onlineCount, name: '在线服务器', itemStyle: { color: '#10b981' } },
+                        { value: offlineCount, name: '离线服务器', itemStyle: { color: '#ef4444' } }
                     ],
-                    label: { color: textColor }
+                    label: { 
+                        color: textColor, 
+                        formatter: '{b}: {c}台 ({d}%)',
+                        fontSize: 12
+                    },
+                    emphasis: { 
+                        label: { 
+                            show: true, 
+                            fontSize: 16, 
+                            fontWeight: 'bold', 
+                            formatter: '{b}: {c}台 ({d}%)', 
+                            color: textColor 
+                        }
+                    }
                 }]
             });
 
             // 5. 网络
+            const rx = hostData.network_rx || 0;
+            const tx = hostData.network_tx || 0;
+            const rxFormatted = formatBytes(rx * 1024 * 1024); // 转换为字节后格式化
+            const txFormatted = formatBytes(tx * 1024 * 1024); // 转换为字节后格式化
+            
             networkChart.setOption({
-                tooltip: { trigger: 'axis' },
+                tooltip: { 
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        let result = '';
+                        params.forEach(param => {
+                            const value = param.data * 1024 * 1024; // 转换为字节
+                            result += `${param.marker}${param.seriesName}: ${formatBytes(value)}<br/>`;
+                        });
+                        return result;
+                    }
+                },
                 legend: { textStyle: { color: textColor }, bottom: 0 },
                 grid: { top: 30, bottom: 25, left: 50, right: 10 },
                 xAxis: { type: 'category', data: ['当前'], axisLabel: { show: false } },
-                yAxis: { type: 'value', axisLabel: { color: textColor, formatter: '{value}' }, splitLine: { lineStyle: { color: splitLineColor } } },
+                yAxis: { 
+                    type: 'value', 
+                    axisLabel: { 
+                        color: textColor, 
+                        formatter: function(value) {
+                            return formatBytes(value * 1024 * 1024); // 转换为字节后格式化
+                        }
+                    }, 
+                    splitLine: { lineStyle: { color: splitLineColor } }
+                },
                 series: [
-                    { name: '入网', type: 'bar', data: [hostData.network_rx || 0], itemStyle: { color: '#3b82f6' } },
-                    { name: '出网', type: 'bar', data: [hostData.network_tx || 0], itemStyle: { color: '#8b5cf6' } }
+                    { 
+                        name: '入网', 
+                        type: 'bar', 
+                        data: [hostData.network_rx || 0], 
+                        itemStyle: { color: '#3b82f6' },
+                        label: { 
+                            show: true, 
+                            position: 'top', 
+                            formatter: function(params) {
+                                const value = params.value * 1024 * 1024; // 转换为字节
+                                return formatBytes(value);
+                            }, 
+                            color: textColor 
+                        } 
+                    },
+                    { 
+                        name: '出网', 
+                        type: 'bar', 
+                        data: [hostData.network_tx || 0], 
+                        itemStyle: { color: '#8b5cf6' },
+                        label: { 
+                            show: true, 
+                            position: 'top', 
+                            formatter: function(params) {
+                                const value = params.value * 1024 * 1024; // 转换为字节
+                                return formatBytes(value);
+                            }, 
+                            color: textColor 
+                        } 
+                    }
                 ]
             });
         }

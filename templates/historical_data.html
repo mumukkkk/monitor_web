@@ -30,6 +30,7 @@
             --bg-card: rgba(45, 45, 45, 0.6);
             --border-glass: rgba(255, 255, 255, 0.08);
             --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            --wallpaper: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
         }
 
         body {
@@ -161,6 +162,7 @@
             <a class="nav-item" href="/monitor_management">监控配置</a>
             <a class="nav-item" href="/alerts">告警管理</a>
             <a class="nav-item active" href="/historical_data">历史数据</a>
+            <a class="nav-item" href="/statistics">统计分析</a>
         </div>
         <button class="theme-btn" id="themeToggle" onclick="cycleTheme()">🌗</button>
     </div>
@@ -272,12 +274,19 @@
             if (currentMode === 'auto') {
                 const h = new Date().getHours();
                 isDark = (h < 6 || h >= 18);
-            } else if (currentMode === 'dark') isDark = true;
+                themeBtn.textContent = '🌤️'; // 自动模式显示特殊图标
+            } else if (currentMode === 'dark') {
+                isDark = true;
+                themeBtn.textContent = '🌙';
+            } else {
+                isDark = false;
+                themeBtn.textContent = '☀️';
+            }
             
-            if (isDark) { 
-                document.body.classList.add('dark-mode'); themeBtn.textContent = '🌙'; 
-            } else { 
-                document.body.classList.remove('dark-mode'); themeBtn.textContent = '☀️'; 
+            if (isDark) {
+                document.body.classList.add('dark-mode');
+            } else {
+                document.body.classList.remove('dark-mode');
             }
             
             // 重绘图表以适配颜色
