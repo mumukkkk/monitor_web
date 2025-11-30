@@ -1505,7 +1505,7 @@
             btn.innerHTML = '采集ing...';
             btn.disabled = true;
             
-            fetch('/api/run_now', {
+            fetch('/trigger_collection', {
                 method: 'POST'
             })
             .then(response => response.json())
