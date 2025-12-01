@@ -27,7 +27,7 @@ public_exponent = 65537
 modulus = 11428270940227957444121972623858067884844156065700355794405296166301988372477
 
 # 数据库文件路径
-DATABASE = 'server_monitor.db'
+DATABASE = 'server_monitor/server_monitor.db'
 
 def init_db():
     """初始化数据库，创建表"""

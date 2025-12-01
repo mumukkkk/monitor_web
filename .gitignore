@@ -2,6 +2,11 @@
 *.db
 # python文件
 __pycache__/
-privacy.py
 # ansible临时文件
 ansible_inventory
+# 临时文件
+reports/
+server_monitor/
+data/
+logs/
+monitor.log

@@ -10,7 +10,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ./server_monitor.db:/app/server_monitor.db
+      - ./server_monitor:/app/server_monitor
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
