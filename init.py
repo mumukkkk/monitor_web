@@ -100,8 +100,8 @@ def init_db():
             threshold_value REAL NOT NULL,
             comparison_operator TEXT NOT NULL CHECK (comparison_operator IN ('>', '<', '>=', '<=')),
             is_active INTEGER DEFAULT 1,
-            created_at TIMESTAMP NOT NULL,
-            updated_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (host_ip) REFERENCES hosts (ip)
         )
     ''')
@@ -118,7 +118,7 @@ def init_db():
             message TEXT NOT NULL,
             severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
             is_resolved INTEGER DEFAULT 0,
-            created_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             resolved_at TIMESTAMP,
             FOREIGN KEY (rule_id) REFERENCES alert_rules (id)
         )
@@ -160,7 +160,14 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_custom_metric_data_ip_time 
         ON custom_metric_data (ip, check_time)
     ''')
-    
+    # 为 alert_rules 表创建更新触发器
+    cursor.execute('''
+        CREATE TRIGGER IF NOT EXISTS update_alert_rules_timestamp 
+        AFTER UPDATE ON alert_rules
+        BEGIN
+            UPDATE alert_rules SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+        END
+    ''')
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_custom_metric_data_metric 
         ON custom_metric_data (metric_id, check_time)
